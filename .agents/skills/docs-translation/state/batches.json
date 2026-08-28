@@ -1,0 +1,360 @@
+{
+ "B01-core-concepts": [
+  {
+   "src": "index.md",
+   "dst": "index.mdx"
+  },
+  {
+   "src": "concepts.md",
+   "dst": "concepts.mdx"
+  },
+  {
+   "src": "modules.md",
+   "dst": "modules.mdx"
+  },
+  {
+   "src": "choose-your-module.md",
+   "dst": "choose-your-module.mdx"
+  },
+  {
+   "src": "glossary.md",
+   "dst": "glossary.mdx"
+  },
+  {
+   "src": "learning-more.md",
+   "dst": "learning-more.mdx"
+  },
+  {
+   "src": "architecture.md",
+   "dst": "architecture.mdx"
+  }
+ ],
+ "B02-start-community": [
+  {
+   "src": "installation.md",
+   "dst": "installation.mdx"
+  },
+  {
+   "src": "getting-started.md",
+   "dst": "getting-started.mdx"
+  },
+  {
+   "src": "quickstart.md",
+   "dst": "quickstart.mdx"
+  },
+  {
+   "src": "cli-setup.md",
+   "dst": "cli-setup.mdx"
+  },
+  {
+   "src": "explorer-setup.md",
+   "dst": "explorer-setup.mdx"
+  },
+  {
+   "src": "cookbook.md",
+   "dst": "cookbook.mdx"
+  },
+  {
+   "src": "faq.md",
+   "dst": "faq.mdx"
+  },
+  {
+   "src": "community.md",
+   "dst": "community.mdx"
+  },
+  {
+   "src": "community-projects.md",
+   "dst": "community-projects.mdx"
+  },
+  {
+   "src": "contributing-guide.md",
+   "dst": "contributing-guide.mdx"
+  },
+  {
+   "src": "governance.md",
+   "dst": "governance.mdx"
+  },
+  {
+   "src": "citation.md",
+   "dst": "citation.mdx"
+  },
+  {
+   "src": "project-license.md",
+   "dst": "project-license.mdx"
+  },
+  {
+   "src": "changelog.md",
+   "dst": "changelog.mdx"
+  },
+  {
+   "src": "storage-backends.md",
+   "dst": "storage-backends.mdx"
+  },
+  {
+   "src": "migration/kg-provenance-tracker.md",
+   "dst": "migration/kg-provenance-tracker.mdx"
+  }
+ ],
+ "B03-guides-ingest": [
+  {
+   "src": "guides/graphrag.md",
+   "dst": "guides/graphrag.mdx"
+  },
+  {
+   "src": "guides/ingest.md",
+   "dst": "guides/ingest.mdx"
+  },
+  {
+   "src": "guides/pipeline.md",
+   "dst": "guides/pipeline.mdx"
+  }
+ ],
+ "B04-guides-llm-agents": [
+  {
+   "src": "guides/llm-integrations.md",
+   "dst": "guides/llm-integrations.mdx"
+  },
+  {
+   "src": "guides/multi-agent.md",
+   "dst": "guides/multi-agent.mdx"
+  },
+  {
+   "src": "guides/agent-memory.md",
+   "dst": "guides/agent-memory.mdx"
+  }
+ ],
+ "B05-guides-decision-context": [
+  {
+   "src": "guides/decision-intelligence.md",
+   "dst": "guides/decision-intelligence.mdx"
+  },
+  {
+   "src": "guides/context-graphs.md",
+   "dst": "guides/context-graphs.mdx"
+  },
+  {
+   "src": "guides/distance-intelligence.md",
+   "dst": "guides/distance-intelligence.mdx"
+  }
+ ],
+ "B06-guides-provenance-extraction": [
+  {
+   "src": "guides/provenance.md",
+   "dst": "guides/provenance.mdx"
+  },
+  {
+   "src": "guides/semantic-extraction.md",
+   "dst": "guides/semantic-extraction.mdx"
+  },
+  {
+   "src": "guides/ontology.md",
+   "dst": "guides/ontology.mdx"
+  }
+ ],
+ "B07-guides-reasoning-validation": [
+  {
+   "src": "guides/reasoning.md",
+   "dst": "guides/reasoning.mdx"
+  },
+  {
+   "src": "guides/shacl-validation.md",
+   "dst": "guides/shacl-validation.mdx"
+  },
+  {
+   "src": "guides/policy-engine.md",
+   "dst": "guides/policy-engine.mdx"
+  }
+ ],
+ "B08-guides-export-quality": [
+  {
+   "src": "guides/export.md",
+   "dst": "guides/export.mdx"
+  },
+  {
+   "src": "guides/deduplication.md",
+   "dst": "guides/deduplication.mdx"
+  },
+  {
+   "src": "guides/conflict-resolution.md",
+   "dst": "guides/conflict-resolution.mdx"
+  }
+ ],
+ "B09-guides-misc": [
+  {
+   "src": "guides/mcp-server.md",
+   "dst": "guides/mcp-server.mdx"
+  },
+  {
+   "src": "guides/change-management.md",
+   "dst": "guides/change-management.mdx"
+  },
+  {
+   "src": "guides/visualization.md",
+   "dst": "guides/visualization.mdx"
+  },
+  {
+   "src": "guides/graph-analytics.md",
+   "dst": "guides/graph-analytics.mdx"
+  }
+ ],
+ "B10-ref-core": [
+  {
+   "src": "reference/context.md",
+   "dst": "reference/context.mdx"
+  },
+  {
+   "src": "reference/temporal.md",
+   "dst": "reference/temporal.mdx"
+  },
+  {
+   "src": "reference/kg.md",
+   "dst": "reference/kg.mdx"
+  }
+ ],
+ "B11-ref-storage-pipeline": [
+  {
+   "src": "reference/vector_store.md",
+   "dst": "reference/vector_store.mdx"
+  },
+  {
+   "src": "reference/graph_store.md",
+   "dst": "reference/graph_store.mdx"
+  },
+  {
+   "src": "reference/triplet_store.md",
+   "dst": "reference/triplet_store.mdx"
+  },
+  {
+   "src": "reference/ingest.md",
+   "dst": "reference/ingest.mdx"
+  },
+  {
+   "src": "reference/parse.md",
+   "dst": "reference/parse.mdx"
+  },
+  {
+   "src": "reference/split.md",
+   "dst": "reference/split.mdx"
+  }
+ ],
+ "B12-ref-quality": [
+  {
+   "src": "reference/normalize.md",
+   "dst": "reference/normalize.mdx"
+  },
+  {
+   "src": "reference/distance.md",
+   "dst": "reference/distance.mdx"
+  },
+  {
+   "src": "reference/pipeline.md",
+   "dst": "reference/pipeline.mdx"
+  },
+  {
+   "src": "reference/deduplication.md",
+   "dst": "reference/deduplication.mdx"
+  },
+  {
+   "src": "reference/conflicts.md",
+   "dst": "reference/conflicts.mdx"
+  }
+ ],
+ "B13-ref-output": [
+  {
+   "src": "reference/embeddings.md",
+   "dst": "reference/embeddings.mdx"
+  },
+  {
+   "src": "reference/provenance.md",
+   "dst": "reference/provenance.mdx"
+  },
+  {
+   "src": "reference/change_management.md",
+   "dst": "reference/change_management.mdx"
+  },
+  {
+   "src": "reference/export.md",
+   "dst": "reference/export.mdx"
+  },
+  {
+   "src": "reference/visualization.md",
+   "dst": "reference/visualization.mdx"
+  },
+  {
+   "src": "reference/explorer.md",
+   "dst": "reference/explorer.mdx"
+  }
+ ],
+ "B14-ref-utils": [
+  {
+   "src": "reference/reasoning.md",
+   "dst": "reference/reasoning.mdx"
+  },
+  {
+   "src": "reference/semantic_extract.md",
+   "dst": "reference/semantic_extract.mdx"
+  },
+  {
+   "src": "reference/llms.md",
+   "dst": "reference/llms.mdx"
+  },
+  {
+   "src": "reference/mcp_server.md",
+   "dst": "reference/mcp_server.mdx"
+  },
+  {
+   "src": "reference/seed.md",
+   "dst": "reference/seed.mdx"
+  },
+  {
+   "src": "reference/utils.md",
+   "dst": "reference/utils.mdx"
+  },
+  {
+   "src": "reference/core.md",
+   "dst": "reference/core.mdx"
+  },
+  {
+   "src": "reference/ontology.md",
+   "dst": "reference/ontology.mdx"
+  },
+  {
+   "src": "reference/evals.md",
+   "dst": "reference/evals.mdx"
+  }
+ ],
+ "B15-stores-integrations": [
+  {
+   "src": "vector_stores/pgvector.md",
+   "dst": "vector_stores/pgvector.mdx"
+  },
+  {
+   "src": "graph_stores/apache_age.md",
+   "dst": "graph_stores/apache_age.mdx"
+  },
+  {
+   "src": "integrations/agno.md",
+   "dst": "integrations/agno.mdx"
+  },
+  {
+   "src": "integrations/crewai.md",
+   "dst": "integrations/crewai.mdx"
+  },
+  {
+   "src": "integrations/langchain.md",
+   "dst": "integrations/langchain.mdx"
+  },
+  {
+   "src": "integrations/docling.md",
+   "dst": "integrations/docling.mdx"
+  },
+  {
+   "src": "integrations/snowflake.md",
+   "dst": "integrations/snowflake.mdx"
+  },
+  {
+   "src": "integrations/databricks.md",
+   "dst": "integrations/databricks.mdx"
+  }
+ ]
+}

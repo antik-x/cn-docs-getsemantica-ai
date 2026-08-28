@@ -1,0 +1,29 @@
+{
+  "$comment": "docs-translation 技能的项目配置。所有相对路径以本文件所在目录（技能根）为基准。字段说明见同目录 SKILL.md。",
+  "site_name": "cn-docs-getsemantica-ai",
+  "target_language": "zh-CN",
+  "upstream": {
+    "repo": "https://github.com/semantica-agi/semantica",
+    "branch": "main",
+    "docs_dir": "docs"
+  },
+  "source_cache": "/tmp/semantica-src",
+  "site_root": "../../..",
+  "nav_file": "docs.json",
+  "source_ext": ".md",
+  "target_ext": ".mdx",
+  "pairs": "state/batches.json",
+  "rules": "references/rules.md",
+  "terminology": "references/terminology.md",
+  "sync_state": "state/sync-state.json",
+  "protected_assets": ["favicon.svg", "og-card.png"],
+  "nav_tabs": {
+    "Overview": "概览",
+    "Quick Start": "快速开始",
+    "Modules": "模块",
+    "Cookbook": "实战手册",
+    "FAQ": "常见问题",
+    "Changelog": "更新日志"
+  },
+  "batch_prefix": "B"
+}

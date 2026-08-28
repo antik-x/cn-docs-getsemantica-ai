@@ -1,0 +1,5 @@
+{
+  "last_synced_commit": "cce5ea177cbac29a526effa546219c48f8ec36f4",
+  "last_synced_date": "2026-08-28",
+  "notes": "中文站点内容与该 commit 的 docs/ 一一对应（全量翻译完成于 2026-08-28；同日增量同步 docs/guides/pipeline.md）。上游仓库、分支、文档目录见 project.json。同步时以上方 commit 为 git diff 基线；同步完成后必须更新 last_synced_commit 与 last_synced_date。"
+}

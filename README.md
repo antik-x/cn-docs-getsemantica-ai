@@ -15,27 +15,11 @@ npm i -g mint
 mint dev        # 本地预览 http://localhost:3000
 ```
 
-## 校验
-
-```bash
-cd ..
-python3 translation/verify_structure.py   # 与英文源逐篇比对结构一致性
-```
-
 ## 目录约定
 
 - 页面为 `.mdx`（MDX），路径与英文源 `.md` 一一对应（如 `docs/guides/graphrag.md` → `guides/graphrag.mdx`）
 - 导航、分组与 Tab 结构见 `docs.json`（已译为中文）
 - 品牌资产（logo、示意图、custom.css）复刻自官方站点 `assets/`
-
-## 翻译工程文件
-
-位于仓库上层的 `../translation/`：
-
-- `terminology.md` —— 术语表（约束性，含保留英文清单与首现对照规则）
-- `rules.md` —— 翻译规则摘要
-- `batches.json` —— 翻译批次清单
-- `verify_structure.py` —— 结构一致性校验器
 
 ## License
 
