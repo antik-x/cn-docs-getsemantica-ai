@@ -241,7 +241,18 @@ engine   = ExecutionEngine(max_workers=2, retry_on_failure=True)
 result   = engine.execute_pipeline(pipeline)
 ```
 
-`set_parallelism(n)` 告诉引擎最多可以同时运行多少个步骤。拓扑排序保证了只有依赖全部完成的步骤才有资格并发执行——你不可能在输入尚未就绪时意外运行某个步骤。
+`set_parallelism(n)` 告诉引擎最多可以同时运行多少个步骤；`n` 必须是正整数。拓扑排序保证了只有依赖全部完成的步骤才有资格并发执行——你不可能在输入尚未就绪时意外运行某个步骤。实际并发上限为 `min(n, max_workers)`，因此引擎的 `max_workers` 设置始终是硬性资源上限。
+
+并发需要按步骤显式开启。一个依赖层只有满足以下全部条件才会并行运行：层内每个步骤都标记了 `parallel_safe`、该层包含不止一个步骤、且流入该层的数据是字典（dict）：
+
+```python
+builder.add_step("ner",      "ner_extract",     parallel_safe=True, confidence_threshold=0.75)
+builder.add_step("triplets", "triplet_extract", parallel_safe=True, include_temporal=True)
+```
+
+如果层内任一步骤未标记 `parallel_safe`，或某一步骤以 Delta 模式运行，整个层都会回退为顺序执行——并行绝不会静默绕过未声明安全的步骤。`parallel_safe` 是一个控制字段：与 `dependencies` 一样，它由构建器消费，不会进入你处理函数的配置。
+
+并行安全的处理函数必须返回字典。并行层中的每个步骤都会收到该层输入的一份隔离深拷贝，因此步骤之间看不到彼此的修改。各步骤的结果按步骤声明顺序逐一按键合并：仅由一个步骤写入的键会加入合并后的输出；多个步骤写入相同值的键会被保留；两个步骤对同一键写入不同值时，流水线会以 `ProcessingError` 失败，错误信息指明冲突的键与涉事的两个步骤。触及共享可变资源——数据库连接、内存存储、全局缓存——的处理函数不应标记 `parallel_safe`。
 
 ## 常见陷阱
 
