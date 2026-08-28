@@ -4,6 +4,7 @@
 
 Semantica 官方文档的简体中文版，基于 [Mintlify](https://mintlify.com) 构建，与英文源站结构、URL 一一对应。
 
+- **在线阅读**：[whyactions.mintlify.site](https://whyactions.mintlify.site/)
 - **英文源**：[semantica-agi/semantica](https://github.com/semantica-agi/semantica) 仓库 `docs/` 目录（MIT License）
 - **覆盖范围**：全部 82 篇文档 —— 线上发布的 79 篇，外加仓库中 3 篇未发布的隐藏页（`changelog`、`storage-backends`、`migration/kg-provenance-tracker`）
 - **翻译原则**：信达雅；结构与源文逐项锁定（标题层级、列表、表格、JSX 组件）；代码块（含注释）字节级原样保留；术语遵循统一术语表
