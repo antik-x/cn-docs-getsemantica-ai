@@ -1,18 +1,14 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "Semantica",
+  "name": "Semantica 中文文档",
   "description": "面向 AI 的问责与上下文层 — 上下文图谱 · 决策智能 · 全链路溯源",
   "colors": {
     "primary": "#10B981",
     "light": "#10B981",
     "dark": "#10B981"
   },
-  "favicon": "/assets/img/semantica-logo.png",
-  "logo": {
-    "light": "/assets/img/semantica-logo.png",
-    "dark": "/assets/img/semantica-logo.png"
-  },
+  "favicon": "/assets/favicon.svg",
   "font": {
     "headings": {
       "family": "Space Grotesk",
@@ -43,11 +39,14 @@
     "raiseIssue": true
   },
   "metadata": {
-    "og:title": "Semantica — 面向 AI 的问责与上下文层",
-    "og:description": "构建可解释、可审计、具备全链路溯源的知识图谱。开源，MIT 许可。",
-    "og:image": "/assets/img/semantica-logo.png",
-    "twitter:card": "summary_large_image",
-    "twitter:site": "@BuildSemantica"
+    "og:title": "Semantica 中文文档 — 面向 AI 的问责与上下文层",
+    "og:description": "Semantica 官方文档的非官方简体中文翻译：构建可解释、可审计、具备全链路溯源的知识图谱。开源，MIT 许可。",
+    "og:image": "/assets/og-card.png",
+    "twitter:card": "summary_large_image"
+  },
+  "banner": {
+    "content": "本站为社区维护的非官方中文翻译，与 Semantica 官方无隶属关系；英文原文以 docs.getsemantica.ai 为准。",
+    "dismissible": true
   },
   "navigation": {
     "tabs": [
