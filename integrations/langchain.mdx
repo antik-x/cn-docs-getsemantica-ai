@@ -1,0 +1,81 @@
+---
+title: "LangChain 集成"
+description: "通过 GraphRAG 检索器、VectorStore 适配器与智能体工具，把 Semantica 放进 LangChain / LangGraph 流水线。"
+icon: "link"
+---
+
+> 三个即插即用的适配器，把 Semantica 的上下文图谱与混合检索带入 LangChain 链和 LangGraph 智能体。
+
+## 安装
+
+```bash
+pip install "semantica[langchain]"
+```
+
+要求 `langchain-core >= 0.3`。如果未安装 langchain-core，本集成仍可导入——每个类都携带完整的 Semantica API 并会优雅降级（`build()` 返回 `None`；可依据 `LANGCHAIN_AVAILABLE` 分支处理）。
+
+## 组件一览
+
+- **SemanticaRetriever** — `BaseRetriever`: 以混合检索为检索起点，再沿图谱边走 `hops` 步（默认 2），得到 GraphRAG（Graph-Augmented Retrieval，图增强检索）风格的结果。
+- **SemanticaVectorStore** — `VectorStore`: 在 `HybridSearch` 之上提供 `add_texts` / `similarity_search` / `similarity_search_with_score` / `from_texts`。
+- **SemanticaKGTool** / **SemanticaDecisionTool** — `BaseTool` 子类：面向 LangGraph / 工具调用型智能体的 `semantica_query_graph` 与 `semantica_query_decisions`。
+
+## 组件详情
+
+<Tabs>
+  <Tab title="SemanticaRetriever">
+    混合检索给出候选结果；随后沿图谱边走 `hops` 步，让结果超越扁平的向量相似度。如果混合检索缺省或失败，检索器会回退到 `ContextGraph.query` 关键词扫描。
+
+    ```python
+    from integrations.langchain import SemanticaRetriever
+    from semantica.context import ContextGraph
+    from semantica.vector_store import HybridSearch
+
+    graph = ContextGraph()
+    hybrid = HybridSearch()
+
+    retriever = SemanticaRetriever(graph=graph, hybrid=hybrid, hops=2, top_k=10)
+
+    from langchain.chains import RetrievalQA
+
+    qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
+    ```
+  </Tab>
+  <Tab title="SemanticaVectorStore">
+    可直接插入 RetrievalQA / LCEL 链的 `VectorStore`。`from_texts` 需要一个预先配置好的 `hybrid` 实例。
+
+    ```python
+    from integrations.langchain import SemanticaVectorStore
+
+    store = SemanticaVectorStore(hybrid=hybrid)
+    store.add_texts(
+        ["document one", "document two"],
+        metadatas=[{"source": "a"}, {"source": "b"}],
+    )
+    docs = store.similarity_search("document", k=2)
+    docs, scores = store.similarity_search_with_score("document", k=2)
+    ```
+
+    `add_texts` 会委托给带有 `add_documents` 的 Semantica 向量存储（把 `vector_store=` 传给 `HybridSearch` 或 `SemanticaVectorStore`）。
+  </Tab>
+  <Tab title="智能体工具">
+    这些实例都是 LangChain 的 `BaseTool`，可以直接传给智能体。
+    `.build()` 返回工具本身；当缺少 langchain-core 时返回 `None`。
+
+    ```python
+    from integrations.langchain import SemanticaKGTool, SemanticaDecisionTool
+    from langgraph.prebuilt import create_react_agent
+
+    tools = [
+        SemanticaKGTool(graph),
+        SemanticaDecisionTool(graph),
+    ]
+    agent = create_react_agent(model, tools)
+    ```
+
+    | 工具 | 说明 |
+    | :------ | :------------- |
+    | `semantica_query_graph` | 对共享的上下文图谱做关键词/自然语言查询 |
+    | `semantica_query_decisions` | 检索已记录的决策日志 |
+  </Tab>
+</Tabs>

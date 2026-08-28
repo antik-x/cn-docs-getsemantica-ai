@@ -1,0 +1,564 @@
+---
+title: "距离智能"
+description: "将图邻近度划分为距离带，沿路径计算置信度衰减，运行多算法路径查找，并在检索中将语义相似度与结构邻近度混合。"
+icon: "route"
+---
+
+`ContextGraph` 的距离智能回答纯语义相似度无法回答的结构性问题：给定两个节点，它们在图拓扑、路径权重和推断置信度方面的精确关系是什么？你可以用它为归因链标注跳数和置信度衰减，按与锚点节点的结构邻近度为检索结果排序，并将隐含的连接呈现出来供分析师审查。
+
+## 什么是距离智能？
+
+距离智能对知识图谱（Knowledge Graph）中节点之间的结构关系进行量化与分析。它提供关于图路径的详细元数据，包括跳数、距离带、置信度衰减和路径分析。
+
+**距离元数据**包括跳数（节点之间的边数）、距离带（"direct"、"near"、"distant" 等语义类别）、置信度衰减（沿路径累积的信任）以及路径分析（找出节点之间的最优路线）。
+
+**跳数**衡量你从一个节点到达另一个节点需要穿越的边数。跳数为 1 表示直接相连；3 表示要经过 2 个中间节点。
+
+**距离带**把原始跳数转换为有意义的类别："direct"（0-1 跳）、"near"（2-3 跳）、"mid-range"（4-6 跳）和 "distant"（7 跳以上）。这些类别有助于解读图距离的语义含义。
+
+**置信度衰减**将路径上各边的权重相乘，计算累积信任。如果每条边的权重为 0.8，那么一条 3 跳路径的置信度衰减为 0.8³ = 0.512，表示对这条连接有中等程度的置信。
+
+**路径分析**使用 Dijkstra 最短路径或 Yen 的 k 最短路径等算法，找出节点之间的最优路线。
+
+**距离智能与图分析的区别：** 图分析在整个图谱上计算中心度、社区等统计指标；距离智能则聚焦于特定节点之间的具体路径和关系。
+
+**距离智能与图遍历的区别：** 简单遍历沿边查找邻居；距离智能则使用权重、路径和衰减指标来量化这些连接的质量与置信度。
+
+## 为什么使用距离智能？
+
+**置信度感知的检索。** 距离智能不会同等对待所有图连接，而是按路径置信度为结果加权，让通过更强、更直接关系连接起来的节点获得更高排名。
+
+**关系发现。** 不仅能发现两个实体是否相连，还能发现它们如何相连、经由哪些中间节点，以及整条路径上的置信度处于什么水平。
+
+**因果分析。** 在知识图谱中追踪因果链，并为每一步给出量化的置信度——这对决策追踪和审计追踪至关重要。
+
+**先例检索。** 通过分析结构相似度和路径模式（而不仅仅是内容相似度）来查找类似的历史案例。
+
+**图感知排序。** 将语义相似度与图邻近度混合，呈现纯向量检索会错过的、在上下文中相关的结果。
+
+## 何时使用 / 何时不用
+
+**距离智能适用于：**
+- 路径质量很重要的多跳推理
+- 需要置信度评估的归因分析
+- 因果链分析与决策追溯
+- 从特定锚点节点出发的邻近度加权检索
+- 寻找替代连接路线以供核验
+- 同时按内容相关性和结构邻近度对结果排序
+
+**简单图遍历可能就足够的情况：**
+- 查找节点的直接邻居
+- 不需要置信度加权的基础图探索
+- 所有边重要性相同的场景
+- 简单的可达性查询（A 能否到达 B？）
+
+**可能不需要距离智能的情况：**
+- 单跳邻居查询
+- 边权重不代表有意义置信度的图谱
+- 只关心是否存在而无需质量评估的简单查询
+- 路径分析徒增复杂性的场景
+
+<Info>
+  距离智能为邻近度混合检索（`retrieve()` 上的 `proximity_weight`）、因果链分析（`trace_decision_causality()`）和高级先例检索（`find_precedents_hybrid()`）提供支撑。在邻居查询中传入 `include_distance_metadata=True`，或在检索调用中传入 `proximity_weight > 0`，即可启用它。
+</Info>
+
+## 距离带：让跳数变得有意义
+
+距离智能的第一个工具是 `classify_path_distance`——它把任何广度优先搜索（BFS）深度映射为一个人类可读、带有语义的距离带。
+
+```python
+from semantica.utils.helpers import classify_path_distance
+
+print(classify_path_distance(0))   # "direct"  — same node
+print(classify_path_distance(1))   # "direct"  — single edge
+print(classify_path_distance(2))   # "near"    — two-hop neighbourhood
+print(classify_path_distance(3))   # "near"
+print(classify_path_distance(5))   # "mid-range"
+print(classify_path_distance(9))   # "distant" — treat with caution
+```
+
+| 距离带 | 跳数范围 | 实际含义 |
+| :--- | :-------- | :------------------------ |
+| `"direct"` | 0–1 | 直接关系——可进行高置信度推断 |
+| `"near"` | 2–3 | 两跳邻域——关系紧密、可靠 |
+| `"mid-range"` | 4–6 | 可达但语义上已相隔较远 |
+| `"distant"` | 7+ | 耦合微弱——对推断需谨慎对待 |
+
+凡是使用 `include_distance_metadata=True`、`proximity_weight > 0` 或 `trace_decision_causality()` 的结果，都会自动带上这些距离带。你无需手动计算——它们会附加在结果上。
+
+## 置信度衰减：信任如何沿路径流失
+
+路径上的每一跳都会把累积置信度乘以该边的权重。乘积——即 `confidence_decay`——是判断一次多跳推断是否可信的最有用信号。
+
+<Info>
+  **置信度衰减与边权重：** 置信度衰减直接取决于图谱中的边权重。权重应当表示置信度、信任、相关性或类似的领域特定信号，数值越高表示关系越强。无权图（所有边的权重都是 1.0）无法产生有意义的衰减分析。
+</Info>
+
+<Info>
+  **稠密图警告：** 非常稠密的图谱会让路径分析的计算开销变得很高，结果也更难解读。密集的连接会创建许多权重相近的可能路径，使基于距离的排序区分度下降。
+</Info>
+
+```python
+from semantica.context import ContextGraph
+
+graph = ContextGraph()
+graph.add_node("apt29",       "ThreatActor",   "APT29 / NOBELIUM")
+graph.add_node("hammertoss",  "Malware",       "HAMMERTOSS C2 tool")
+graph.add_node("twitter_c2",  "Infrastructure","APT29 Twitter C2 channel")
+graph.add_node("nato_target", "Target",        "NATO defense contractor")
+
+graph.add_edge("apt29",      "hammertoss",  "deploys", weight=0.95)
+graph.add_edge("hammertoss", "twitter_c2",  "uses",    weight=0.88)
+graph.add_edge("twitter_c2", "nato_target", "reaches", weight=0.80)
+
+# Request neighbors with full distance metadata attached
+neighbors = graph.get_neighbors(
+    "apt29",
+    hops=3,
+    include_distance_metadata=True,
+)
+
+for n in neighbors:
+    print("{:20s}  band={:10s}  decay={:.3f}  hop={}".format(
+        n["id"],
+        n["distance_band"],
+        n["confidence_decay"],
+        n["hop"],
+    ))
+```
+
+输出：
+
+```text
+hammertoss            band=direct     decay=0.950  hop=1
+twitter_c2            band=near       decay=0.836  hop=2
+nato_target           band=near       decay=0.669  hop=3
+```
+
+`nato_target` 节点是可达的——但置信度衰减只有 0.669。这意味着从 APT29 与这家 NATO 承包商之间的连接得出的任何推断，都带着横跨三跳累积下来的 33% 不确定性预算。处于 "near" 距离带时，这个推断仍然可用；若在衰减相近的情况下处于 "distant" 距离带，你就应该把它标记出来交由人工审查。
+
+## 获取带距离元数据的全部邻居
+
+`get_neighbor_distances` 返回给定跳数深度内的每个可达节点，按最小置信度阈值过滤，先按跳数由近到远排序，再在同一跳数内按衰减强度由高到低排序。
+
+```python
+neighbors = graph.get_neighbor_distances(
+    "apt29",
+    hops=4,
+    relationship_types=["deploys", "uses", "reaches"],
+    min_confidence=0.60,   # drop nodes where confidence_decay < 0.60
+)
+
+# Each result dict contains:
+# "id", "type", "content"    — node identity
+# "relationship"             — edge type of the last hop
+# "weight"                   — edge weight of the last hop
+# "hop"                      — BFS depth from anchor
+# "distance_band"            — "direct" / "near" / "mid-range" / "distant"
+# "confidence_decay"         — product of all edge weights along the path
+# "path_to_anchor"           — full node ID list from anchor to this node
+
+for n in neighbors:
+    print("[{:10s}] {:20s}  decay={:.3f}  path={}".format(
+        n["distance_band"],
+        n["id"],
+        n["confidence_decay"],
+        " → ".join(n["path_to_anchor"]),
+    ))
+```
+
+## 查找两个节点之间的最短路径
+
+`PathFinder` 提供五种路径算法。选哪一种取决于你需要的是单条最小代价路径、多条备选路径，还是从某个源出发的所有路径。
+
+```python
+from semantica.kg import PathFinder
+
+pf = PathFinder()
+```
+
+**Dijkstra — 加权最短路径。** 默认使用它。它找出边权重之和最小的路径。
+
+```python
+path = pf.dijkstra_shortest_path(
+    graph  = graph,
+    source = "apt29",
+    target = "nato_target",
+)
+length = pf.path_length(graph, path)
+print("Shortest path:", " → ".join(path))
+print("Path length  :", round(length, 3))
+```
+
+**BFS — 无权最短路径。** 当你只想要最少跳数、不在意边权重时使用。
+
+```python
+path = pf.bfs_shortest_path(graph, "apt29", "nato_target")
+print("Hop count:", len(path) - 1)
+```
+
+**K 最短路径 — Yen 算法。** Yen 算法找出两个节点之间的多条备选路径，按总路径代价排序。当你需要备选归因链、冗余性分析或相互印证的路线时使用。找出三条最短路径并证明它们都汇聚到同一个目标，比单条路径更有说服力。
+
+```python
+k_paths = pf.find_k_shortest_paths(graph, "apt29", "nato_target", k=3)
+
+for i, path in enumerate(k_paths, 1):
+    length = pf.path_length(graph, path)
+    band   = classify_path_distance(len(path) - 1)
+    print("Path {} [{}] length={:.3f}: {}".format(
+        i, band, length, " → ".join(path)
+    ))
+```
+
+**从源出发的所有最短路径。** 当你想绘制从锚点节点出发的一切可达目标、了解结构布局时使用。
+
+```python
+all_paths = pf.all_shortest_paths(graph, source="apt29")
+
+for target, paths in all_paths.items():
+    path = paths[0]
+    print("{:20s}  hops={}  path={}".format(
+        target, len(path) - 1, " → ".join(path)
+    ))
+```
+
+## 邻近度混合检索
+
+标准语义检索按结果与查询的文本相似度排序。邻近度混合检索增加了第二个信号：每个结果在结构上距离图中的锚点节点有多近？`proximity_weight` 参数控制混合比例。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+graph   = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    hybrid_alpha=0.5,
+)
+
+context.store([
+    "APT29 exploited CVE-2024-3400 in PAN-OS targeting NATO governments.",
+    "HAMMERTOSS is APT29's C2 tool using Twitter as a covert channel.",
+    "SUNBURST was a supply chain implant targeting SolarWinds Orion.",
+], extract_entities=True, extract_relationships=True)
+
+# 70% semantic + 30% graph proximity, anchored at APT29
+results = context.retrieve(
+    "nation-state C2 infrastructure",
+    max_results      = 8,
+    use_graph        = True,
+    anchor_node      = "APT29",
+    max_hops         = 3,
+    proximity_weight = 0.30,
+    min_score        = 0.20,
+)
+
+for r in results:
+    print("[{:.3f}]  band={:10s}  hop={}  decay={:.3f}  {}".format(
+        r.get("combined_score", r["score"]),
+        r.get("distance_band",   "-"),
+        r.get("hop_distance",    "-"),
+        r.get("confidence_decay", 0),
+        r["content"][:70],
+    ))
+```
+
+当 `proximity_weight > 0` 时，每个结果都会额外获得 `proximity_score`、`combined_score`、`hop_distance`、`distance_band`、`confidence_decay` 和 `path_to_anchor`——让你完整了解每个结果为何排在那个位置。
+
+## 查找结构相似的节点
+
+当你想知道图中哪些其他节点的表现与某个给定节点相似——连接模式相同或文本相近——`find_similar_nodes` 提供了目前 `ContextGraph` 已实现的几种模式。
+
+```python
+# Content similarity — text overlap on node content fields
+content_similar = graph.find_similar_nodes(
+    "CVE-2024-3400",
+    similarity_type = "content",
+    top_k           = 5,
+)
+
+# Structural similarity — nodes with similar neighbourhood topology
+struct_similar = graph.find_similar_nodes(
+    "CVE-2024-3400",
+    similarity_type = "structural",
+    top_k           = 5,
+)
+
+for n in content_similar:
+    print("[{:.3f}] {}  {}".format(n["score"], n["type"], n["id"]))
+```
+
+`similarity_type="content"` 比较节点的文本/内容，而 `similarity_type="structural"` 比较邻域拓扑。其他取值目前都会回退到内容相似度，因此请把 `"embedding"` 留给更底层的 KG API，而不是 `ContextGraph.find_similar_nodes()`。
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防 — CTI/威胁情报">
+
+找出从 C2 IP 到威胁行为者的主归因路径，然后找出所有可供印证的替代路径，在归因结论进入情报产品之前强化归因依据。
+
+```python
+from semantica.context import ContextGraph
+from semantica.kg import PathFinder
+from semantica.utils.helpers import classify_path_distance
+
+graph = ContextGraph(advanced_analytics=True)
+
+for node_id, ntype, content in [
+    ("apt29",       "ThreatActor",   "APT29 / NOBELIUM / Cozy Bear"),
+    ("hammertoss",  "Malware",       "HAMMERTOSS C2 backdoor"),
+    ("twitter_c2",  "Infrastructure","APT29 Twitter C2 (steganography)"),
+    ("github_c2",   "Infrastructure","APT29 GitHub dead-drop resolver"),
+    ("as200651",    "Network",       "APT29 hosting cluster AS200651"),
+    ("nato_gov",    "Target",        "NATO government agency"),
+]:
+    graph.add_node(node_id, ntype, content)
+
+graph.add_edge("apt29",     "hammertoss",  "deploys",   weight=0.95)
+graph.add_edge("hammertoss","twitter_c2",  "c2_via",    weight=0.88)
+graph.add_edge("hammertoss","github_c2",   "c2_via",    weight=0.82)
+graph.add_edge("twitter_c2","as200651",    "hosted_on", weight=0.90)
+graph.add_edge("github_c2", "as200651",    "resolves",  weight=0.76)
+graph.add_edge("as200651",  "nato_gov",    "targets",   weight=0.85)
+
+pf = PathFinder()
+
+# Primary attribution path
+primary = pf.dijkstra_shortest_path(graph, "apt29", "nato_gov")
+length  = pf.path_length(graph, primary)
+band    = classify_path_distance(len(primary) - 1)
+print("Primary [{}] length={:.3f}: {}".format(band, length, " → ".join(primary)))
+
+# Three corroboration paths
+k_paths = pf.find_k_shortest_paths(graph, "apt29", "nato_gov", k=3)
+for i, path in enumerate(k_paths, 1):
+    l = pf.path_length(graph, path)
+    b = classify_path_distance(len(path) - 1)
+    print("Alt {}: {} [{}, length={:.3f}]".format(i, " → ".join(path), b, l))
+
+# All reachable from APT29 with confidence >= 60%
+neighbors = graph.get_neighbor_distances("apt29", hops=4, min_confidence=0.60)
+print("\nReachable from APT29 (confidence >= 60%):")
+for n in neighbors:
+    print("  [{:10s}]  decay={:.3f}  {}".format(
+        n["distance_band"], n["confidence_decay"], n["id"]
+    ))
+```
+
+</Tab>
+
+<Tab title="安全 — SOC/事件响应">
+
+绘制横向移动攻击图，找出攻击者通往域控制器的所有替代路线，并按置信度衰减为每条路线打分，以排定应当优先阻断哪些路径。
+
+```python
+from semantica.context import ContextGraph
+from semantica.kg import PathFinder
+
+graph = ContextGraph()
+
+for node_id, ntype, content in [
+    ("attacker_ip", "ExternalHost", "Attacker 185.220.101.47"),
+    ("wkstn047",    "Host",         "Compromised workstation WKSTN-047"),
+    ("svc_backup",  "Account",      "Stolen service account SVC-BACKUP"),
+    ("jump_server", "Host",         "Jump server JUMP-01"),
+    ("dc01",        "Host",         "Domain controller DC01"),
+    ("ad_forest",   "Asset",        "Active Directory forest root"),
+]:
+    graph.add_node(node_id, ntype, content)
+
+graph.add_edge("attacker_ip","wkstn047",    "initial_access",   weight=0.90)
+graph.add_edge("wkstn047",   "svc_backup",  "credential_theft", weight=0.85)
+graph.add_edge("svc_backup", "jump_server", "lateral_move",     weight=0.78)
+graph.add_edge("jump_server","dc01",        "lateral_move",     weight=0.88)
+graph.add_edge("wkstn047",   "dc01",        "direct_smb",       weight=0.60)
+graph.add_edge("dc01",       "ad_forest",   "controls",         weight=0.98)
+
+pf = PathFinder()
+
+# All routes to DC01 — which to block first?
+routes = pf.find_k_shortest_paths(graph, "attacker_ip", "dc01", k=3)
+for i, route in enumerate(routes, 1):
+    length = pf.path_length(graph, route)
+    print("Route {} (length={:.3f}): {}".format(i, length, " → ".join(route)))
+
+# What is exposed if DC01 is compromised?
+exposed = graph.get_neighbor_distances("dc01", hops=2, min_confidence=0.70)
+for n in exposed:
+    print("Exposed: {:15s}  [{:8s}]  decay={:.3f}".format(
+        n["id"], n["distance_band"], n["confidence_decay"]
+    ))
+```
+
+</Tab>
+
+<Tab title="生命科学 — 临床/制药">
+
+绘制药物-酶抑制链，计算多步代谢通路的置信度衰减，并使用邻近度混合检索找出结构上最相关的药物相互作用证据。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.kg import PathFinder
+
+graph   = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    graph_expansion=True,
+)
+
+for node_id, ntype, content in [
+    ("warfarin",    "Drug",   "Warfarin — anticoagulant, narrow therapeutic window"),
+    ("amiodarone",  "Drug",   "Amiodarone — antiarrhythmic"),
+    ("cyp2c9",      "Enzyme", "CYP2C9 — hepatic cytochrome P450"),
+    ("bleeding",    "ADE",    "Major bleeding adverse event"),
+    ("cyp3a4",      "Enzyme", "CYP3A4 — major metabolising enzyme"),
+    ("simvastatin", "Drug",   "Simvastatin — HMG-CoA reductase inhibitor"),
+]:
+    graph.add_node(node_id, ntype, content)
+
+graph.add_edge("amiodarone", "cyp2c9",     "inhibits",    weight=0.92)
+graph.add_edge("cyp2c9",     "warfarin",   "metabolises", weight=0.95)
+graph.add_edge("warfarin",   "bleeding",   "risk_of",     weight=0.88)
+graph.add_edge("amiodarone", "cyp3a4",     "inhibits",    weight=0.80)
+graph.add_edge("cyp3a4",     "simvastatin","metabolises", weight=0.90)
+
+pf = PathFinder()
+
+# Interaction chain: amiodarone → bleeding (3 hops, decay = 0.92 × 0.95 × 0.88 = 0.769)
+path   = pf.dijkstra_shortest_path(graph, "amiodarone", "bleeding")
+length = pf.path_length(graph, path)
+print("Interaction chain: {} (length: {:.3f})".format(" → ".join(path), length))
+
+# All paths from amiodarone — what does it reach?
+all_paths = pf.all_shortest_paths(graph, "amiodarone")
+for target, paths in all_paths.items():
+    p = paths[0]
+    print("  {:15s}  hops={} path={}".format(target, len(p)-1, " → ".join(p)))
+
+# Proximity-blended retrieval anchored at amiodarone
+context.store([
+    "CYP2C9 inhibition by amiodarone reduces warfarin metabolism, raising INR.",
+    "Patients on warfarin and amiodarone have 4-fold increased major bleeding risk.",
+], extract_entities=True, extract_relationships=True)
+
+results = context.retrieve(
+    "anticoagulant enzyme inhibition",
+    anchor_node      = "amiodarone",
+    max_hops         = 3,
+    proximity_weight = 0.35,
+    max_results      = 5,
+)
+for r in results:
+    print("[{:.3f}]  {:10s}  {}".format(
+        r.get("combined_score", r["score"]),
+        r.get("distance_band", "-"),
+        r["content"][:80],
+    ))
+```
+
+</Tab>
+
+<Tab title="银行 — 风险/合规">
+
+为从宏观经济冲击到具体贷款组合的因果距离打分，找出所有敞口路线，并记录一条带有完整因果链标注的压力测试决策。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.kg import PathFinder
+from semantica.utils.helpers import classify_path_distance
+
+graph   = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    graph_expansion=True,
+    decision_tracking=True,
+)
+
+for node_id, ntype, content in [
+    ("rate_hike",      "MacroEvent", "Central bank +300bps rate cycle"),
+    ("real_estate",    "Sector",     "UK residential real estate"),
+    ("cre_sector",     "Sector",     "UK commercial real estate"),
+    ("ltv_stress",     "RiskFactor", "LTV ratios deteriorate under higher rates"),
+    ("dscr_stress",    "RiskFactor", "DSCR falls below 1.0 at +300bps"),
+    ("resi_portfolio", "Portfolio",  "Retail mortgage book £4.2bn"),
+    ("cre_portfolio",  "Portfolio",  "CRE lending book £1.8bn"),
+    ("provision",      "Impact",     "Expected credit loss provision increase"),
+]:
+    graph.add_node(node_id, ntype, content)
+
+graph.add_edge("rate_hike",    "real_estate",    "depresses", weight=0.88)
+graph.add_edge("rate_hike",    "cre_sector",     "depresses", weight=0.85)
+graph.add_edge("real_estate",  "ltv_stress",     "causes",    weight=0.78)
+graph.add_edge("cre_sector",   "dscr_stress",    "causes",    weight=0.82)
+graph.add_edge("ltv_stress",   "resi_portfolio", "exposes",   weight=0.90)
+graph.add_edge("dscr_stress",  "cre_portfolio",  "exposes",   weight=0.88)
+graph.add_edge("resi_portfolio","provision",      "increases", weight=0.75)
+graph.add_edge("cre_portfolio", "provision",      "increases", weight=0.80)
+
+pf = PathFinder()
+
+# How does a rate hike reach ECL provisions?
+k_routes = pf.find_k_shortest_paths(graph, "rate_hike", "provision", k=3)
+for i, route in enumerate(k_routes, 1):
+    length = pf.path_length(graph, route)
+    hops   = len(route) - 1
+    band   = classify_path_distance(hops)
+    print("Route {} [{:10s}] length={:.3f}: {}".format(
+        i, band, length, " → ".join(route)
+    ))
+
+# Full risk exposure map
+exposed = graph.get_neighbor_distances("rate_hike", hops=5, min_confidence=0.65)
+print("\nRisk exposure map from rate hike:")
+for n in exposed:
+    print("  [{:10s}]  decay={:.3f}  {}".format(
+        n["distance_band"], n["confidence_decay"], n["id"]
+    ))
+
+# Record and trace the stress-test decision
+dec_id = context.record_decision(
+    category       = "stress_test",
+    scenario       = "+300bps rate shock — portfolio stress test Q3 2025",
+    reasoning      = "LTV deterioration on resi book within tolerance; CRE DSCR breach requires provisioning",
+    outcome        = "increase_provision_cre_book",
+    confidence     = 0.87,
+    decision_maker = "risk_model_v3",
+)
+
+chains = graph.trace_decision_causality(dec_id, max_depth=5)
+for chain in chains:
+    print("\nCausal chain ({} hops, {}, decay={:.3f}):".format(
+        chain["hop_count"], chain["distance_band"], chain["confidence_decay"]
+    ))
+    print("  Interpretation:", chain["interpretation"])
+```
+
+</Tab>
+
+</Tabs>
+
+## 常见陷阱
+
+**把置信度衰减当作统计概率。** 置信度衰减是基于边权重的启发式度量，不是统计概率。0.6 的衰减值并不意味着「60% 的概率」——它表示的是基于你领域特定权重赋值的路径强度。
+
+**使用无权图却期望得到有意义的衰减。** 如果所有边的权重都是 1.0，那么无论路径多长，置信度衰减都恒为 1.0，无法在路径之间做出有效区分。请赋予能反映关系强弱的有意义权重。
+
+**在稠密图上进行过度的路径探索。** 节点高度互联的稠密图可能生成指数级数量的路径。请限制 `max_hops`、使用 `min_confidence` 阈值，并考虑简单的邻居查找是否已经足够。
+
+**在简单邻居查找就够用时过度使用距离分析。** 如果你只需要直接邻居或一跳连接，基础图遍历比完整的距离智能分析更简单、更快。
+
+**检索过大的图邻域。** 过大的 `max_hops` 取值会检索出庞大的子图，压垮下游处理。请从 2-3 跳开始，只在你的具体使用场景确实需要时再增大。
+
+## 相关指南
+
+- [上下文图谱](context-graphs) — `ContextGraph` 的节点与边模型；`add_edge(weight=...)` 为置信度衰减提供输入
+- [图分析](graph-analytics) — 中心度、社区发现、Node2Vec 嵌入（Embedding）、链路预测
+- [智能体记忆](agent-memory) — 邻近度混合检索（`proximity_weight`）把距离智能融入记忆检索
+- [决策智能](decision-intelligence) — `trace_decision_causality()` 生成带距离标注的因果链
+- [Reasoning & Rules](reasoning) — `TemporalReasoningEngine` 在带时间边界的图节点上执行 Allen 区间代数

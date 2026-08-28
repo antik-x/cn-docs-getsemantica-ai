@@ -1,0 +1,882 @@
+---
+title: "时序智能"
+description: "面向时间感知知识图谱的双时态事实、时点快照、Allen 区间代数、时序模式检测与自然语言时序解析。"
+icon: "clock"
+---
+
+时序智能（Temporal Intelligence）让你的知识图谱（Knowledge Graph）完整理解*何时*——不仅知道什么为真，还知道它在现实世界中何时为真、何时被记录，以及事实如何随时间演变。
+
+这套系统分**v0.3.0**（上下文时序有效性）与 **v0.4.0**（完整时序技术栈）两次交付，覆盖五个层次：
+
+<div style={{display:"flex",flexWrap:"wrap",gap:"1.5rem",margin:"1.5rem 0"}}>
+  <div style={{flex:"1 1 180px",padding:"1.25rem 1.5rem",borderRadius:"10px",border:"1px solid rgba(16,185,129,0.25)",background:"rgba(16,185,129,0.04)"}}>
+    <div style={{fontSize:"1.1rem",fontWeight:700,color:"#10B981",marginBottom:"6px"}}>双时态模型</div>
+    <div style={{fontSize:"0.82rem",color:"rgba(255,255,255,0.6)",lineHeight:1.5}}>每条事实同时带有有效时间 + 事务时间</div>
+  </div>
+  <div style={{flex:"1 1 180px",padding:"1.25rem 1.5rem",borderRadius:"10px",border:"1px solid rgba(16,185,129,0.25)",background:"rgba(16,185,129,0.04)"}}>
+    <div style={{fontSize:"1.1rem",fontWeight:700,color:"#10B981",marginBottom:"6px"}}>时点查询</div>
+    <div style={{fontSize:"0.82rem",color:"rgba(255,255,255,0.6)",lineHeight:1.5}}>一次调用重建任意历史图谱状态</div>
+  </div>
+  <div style={{flex:"1 1 180px",padding:"1.25rem 1.5rem",borderRadius:"10px",border:"1px solid rgba(16,185,129,0.25)",background:"rgba(16,185,129,0.04)"}}>
+    <div style={{fontSize:"1.1rem",fontWeight:700,color:"#10B981",marginBottom:"6px"}}>Allen 区间代数</div>
+    <div style={{fontSize:"0.82rem",color:"rgba(255,255,255,0.6)",lineHeight:1.5}}>全部 13 种时序关系，确定性推理</div>
+  </div>
+  <div style={{flex:"1 1 180px",padding:"1.25rem 1.5rem",borderRadius:"10px",border:"1px solid rgba(16,185,129,0.25)",background:"rgba(16,185,129,0.04)"}}>
+    <div style={{fontSize:"1.1rem",fontWeight:700,color:"#10B981",marginBottom:"6px"}}>自然语言时序解析</div>
+    <div style={{fontSize:"0.82rem",color:"rgba(255,255,255,0.6)",lineHeight:1.5}}>零大语言模型（LLM）调用——纯正则（regex）+ dateutil</div>
+  </div>
+</div>
+
+
+## 导出类
+
+| 类 | 作用 |
+| :---- | :---- |
+| `BiTemporalFact` | 封装 `valid_from`、`valid_until`、`recorded_at`、`superseded_at` 的数据类。工厂方法：`BiTemporalFact.from_relationship(rel_dict)` |
+| `TemporalBound` | 表示开放区间的枚举哨兵值。唯一取值：`TemporalBound.OPEN` |
+| `TemporalInterval` | 不可变数据类 `(start: datetime, end: datetime \| TemporalBound, label?)`，供 `TemporalReasoningEngine` 使用 |
+| `IntervalRelation` | 全部 13 种 Allen 关系标签的枚举（`BEFORE`、`AFTER`、`MEETS` 等） |
+| `TemporalGraphQuery` | 时点快照、范围查询、模式检测、演化分析与时序路径查找 |
+| `TemporalPatternDetector` | 在时序边上检测序列与循环模式 |
+| `TemporalReasoningEngine` | 作用于 `TemporalInterval` 对象的 Allen 区间代数——纯 Python，确定性 |
+| `TemporalNormalizer` | 把自然语言时序表达式解析为 `(datetime, datetime)` 元组——零 LLM 调用 |
+| `TemporalQueryRewriter` | 从自由文本查询中提取时序意图；返回 `TemporalQueryResult` |
+| `TemporalQueryResult` | `TemporalQueryRewriter.rewrite()` 的数据类输出 |
+| `TemporalVersionManager` | 创建、列出、比较版本化图谱快照并对其应用修订 |
+
+
+## 快速开始
+
+<Steps>
+  <Step title="构建时间感知图谱">
+    在构建时为任意关系附加 `valid_from` / `valid_until`：
+
+    ```python
+    from semantica.kg import GraphBuilder
+
+    builder = GraphBuilder()
+    kg = builder.build(sources=[{
+        "entities": [
+            {"id": "alice",     "type": "Person"},
+            {"id": "acme_corp", "type": "Organization"},
+            {"id": "beta_ltd",  "type": "Organization"},
+        ],
+        "relationships": [
+            {
+                "source": "alice", "target": "acme_corp", "type": "ceo_of",
+                "valid_from":  "2018-01-01",
+                "valid_until": "2022-06-01",
+            },
+            {
+                "source": "alice", "target": "beta_ltd", "type": "ceo_of",
+                "valid_from":  "2022-06-01",
+                # No valid_until → open-ended (TemporalBound.OPEN)
+            },
+        ],
+    }])
+    ```
+  </Step>
+  <Step title="在某个时间点查询图谱">
+    `TemporalGraphQuery` 接受构造函数参数；把图谱传入每次查询调用：
+
+    ```python
+    from semantica.kg import TemporalGraphQuery
+
+    query = TemporalGraphQuery(temporal_granularity="day")
+
+    # query_at_time is the primary public API
+    result_2020 = query.query_at_time(kg, query="", at_time="2020-06-15")
+    result_2023 = query.query_at_time(kg, query="", at_time="2023-01-01")
+
+    print(f"Rels active in 2020: {result_2020['num_relationships']}")
+    print(f"Rels active in 2023: {result_2023['num_relationships']}")
+    ```
+  </Step>
+  <Step title="在指定时间戳重建子图">
+    `reconstruct_at_time()` 是底层原语——返回一个完整的图谱字典，其中只包含在给定时刻有效的节点和边：
+
+    ```python
+    snapshot = query.reconstruct_at_time(kg, "2021-06-15")
+    # snapshot has "entities" and "relationships" keys
+    # usable with all GraphAnalyzer, PathFinder, CommunityDetector calls
+    ```
+  </Step>
+  <Step title="创建版本化快照">
+    ```python
+    from semantica.kg import TemporalVersionManager
+
+    versioner = TemporalVersionManager()          # in-memory storage
+    # versioner = TemporalVersionManager(storage_path="versions.db")  # SQLite
+
+    versioner.create_snapshot(
+        kg,
+        version_label="2024-Q1",
+        author="user@example.com",
+        description="Q1 2024 snapshot after board restructure",
+    )
+
+    for v in versioner.list_versions():
+        print(f"{v['label']:12s}  {v['author']}  {v['timestamp']}")
+    ```
+  </Step>
+</Steps>
+
+
+## 双时态模型
+
+大多数系统只追踪一条时间线：某件事现在是否为真。双时态（Bi-temporal）图谱则同时追踪**两条相互独立的时间线**：
+
+<Tabs>
+  <Tab title="有效时间">
+    *这条事实在现实世界中何时为真？*
+
+    - `valid_from`——事实开始为真的日期
+    - `valid_until`——事实不再为真的日期。对当前仍生效的事实，可省略（或使用 `TemporalBound.OPEN`）
+
+    ```python
+    from semantica.kg import BiTemporalFact, TemporalBound
+
+    # Create from an existing relationship dict
+    rel = {
+        "source": "alice", "target": "acme_corp", "type": "ceo_of",
+        "valid_from":  "2018-01-01",
+        "valid_until": "2022-06-01",
+    }
+    fact = BiTemporalFact.from_relationship(rel)
+
+    print(fact.valid_from)   # datetime(2018, 1, 1, tzinfo=utc)
+    print(fact.valid_until)  # datetime(2022, 6, 1, tzinfo=utc)
+
+    # Serialize back to dict fields
+    fields = fact.to_relationship_fields()
+    print(fields["valid_from"])   # "2018-01-01T00:00:00Z"
+    print(fields["valid_until"])  # "2022-06-01T00:00:00Z"
+    ```
+  </Tab>
+  <Tab title="事务时间">
+    *我们是在什么时候把这条事实记录进系统的？*
+
+    - `recorded_at`——摄取时自动打上时间戳（默认为 `datetime.now(utc)`）
+    - `superseded_at`——当更新的版本替换本记录时设置。`TemporalBound.OPEN` 表示仍是当前记录
+
+    ```python
+    rel = {
+        "source": "alice", "target": "acme_corp", "type": "ceo_of",
+        "valid_from":    "2018-01-01",
+        "valid_until":   "2022-06-01",
+        "recorded_at":   "2018-01-05T09:32:00Z",
+        "superseded_at": None,   # still the current record
+    }
+    fact = BiTemporalFact.from_relationship(rel)
+
+    print(fact.recorded_at)    # datetime(2018, 1, 5, 9, 32, tzinfo=utc)
+    print(fact.superseded_at)  # TemporalBound.OPEN
+    ```
+  </Tab>
+  <Tab title="TemporalBound.OPEN">
+    `TemporalBound.OPEN` 是表示开放区间的唯一哨兵值——即没有定义结束日期的事实：
+
+    ```python
+    from semantica.kg import TemporalBound
+
+    print(TemporalBound.OPEN)          # TemporalBound.OPEN
+    print(TemporalBound.OPEN.value)    # "OPEN"
+
+    # A relationship with no valid_until gets TemporalBound.OPEN automatically
+    rel = {"source": "alice", "target": "beta_ltd", "type": "ceo_of",
+           "valid_from": "2022-06-01"}
+    fact = BiTemporalFact.from_relationship(rel)
+    print(fact.valid_until)            # TemporalBound.OPEN
+    ```
+
+    <Note>
+      `TemporalBound.OPEN` 同时取代了起点与终点哨兵——只有一个取值。推理引擎在比较结束边界时将 `OPEN` 视为 `datetime.max`（遥远未来），在用于 `superseded_at` 时视为 `datetime.min`（遥远过去）。
+    </Note>
+  </Tab>
+</Tabs>
+
+
+## TemporalGraphQuery——参考
+
+只需构造一次；图谱在每次方法调用时传入：
+
+```python
+from semantica.kg import TemporalGraphQuery
+
+query = TemporalGraphQuery(
+    enable_temporal_reasoning=True,   # default
+    temporal_granularity="day",       # second|minute|hour|day|week|month|year
+    max_temporal_depth=None,          # optional max depth
+)
+```
+
+### 核心方法
+
+| 方法 | 返回值 | 描述 |
+| :------ | :------- | :----------- |
+| `query_at_time(graph, query, at_time, include_history=False, time_axis="valid")` | `Dict` | 主 API——把图谱过滤为在 `at_time` 时刻有效的事实。返回 `entities`、`relationships`、`num_entities`、`num_relationships` |
+| `reconstruct_at_time(graph, at_time, *, time_axis="valid")` | `Dict` | 底层方法——返回在 `at_time` 时刻有效的深拷贝子图。可与所有分析工具配合使用 |
+| `query_time_range(graph, query, start_time, end_time, temporal_aggregation="union", include_intervals=True, time_axis="valid")` | `Dict` | `[start, end]` 期间活跃的所有关系。`temporal_aggregation`：`"union"` / `"intersection"` / `"evolution"` |
+| `validate_temporal_consistency(graph)` | `TemporalConsistencyReport` | 检测倒置区间、同一条边上重叠的事实，以及实体生命周期违规 |
+| `query_temporal_pattern(graph, pattern, time_window=None, min_support=1)` | `Dict` | 检测 `"sequence"` 或 `"cycle"` 模式。内部委托给 `TemporalPatternDetector` |
+| `analyze_evolution(graph, entity=None, relationship=None, start_time=None, end_time=None, metrics=None)` | `Dict` | 随时间追踪演化指标（`"count"`、`"diversity"`、`"stability"`） |
+| `find_temporal_paths(graph, source, target, start_time=None, end_time=None, max_path_length=None, enforce_causal_ordering=True, ordering_strategy="strict")` | `Dict` | 遵循时序有效性的 BFS 路径。`ordering_strategy`：`"strict"` / `"overlap"` / `"loose"` |
+
+### `time_axis` 参数
+
+所有查询方法都接受 `time_axis` 参数，用于控制过滤时使用哪些时间戳：
+
+| 取值 | 效果 |
+| :---- | :----- |
+| `"valid"`（默认） | 按 `valid_from` / `valid_until` 过滤——事实何时为真 |
+| `"transaction"` | 按 `recorded_at` / `superseded_at` 过滤——我们何时记录它 |
+| `"both"` | 事实必须同时在两条时间轴上有效 |
+
+### 范围查询示例
+
+```python
+# All relationships active at any point in 2021
+result = query.query_time_range(kg, "", "2021-01-01", "2021-12-31")
+for rel in result["relationships"]:
+    print(f"  {rel['source']} --[{rel['type']}]--> {rel['target']}")
+
+# Only relationships valid throughout the entire range (stricter)
+result = query.query_time_range(
+    kg, "", "2021-01-01", "2021-12-31",
+    temporal_aggregation="intersection",
+)
+
+# Grouped by calendar period
+result = query.query_time_range(
+    kg, "", "2021-01-01", "2021-12-31",
+    temporal_aggregation="evolution",
+)
+for period, rels in result["relationship_buckets"].items():
+    print(f"  {period}: {len(rels)} relationships active")
+```
+
+### 演化分析
+
+```python
+evolution = query.analyze_evolution(
+    kg,
+    entity="alice",            # track a specific entity (None = whole graph)
+    relationship="ceo_of",     # track a specific edge type (None = all)
+    start_time="2018-01-01",
+    end_time="2024-12-31",
+    metrics=["count", "diversity", "stability"],
+)
+print(f"Relationship count:    {evolution['count']}")
+print(f"Relationship types:    {evolution['diversity']}")
+```
+
+### 时序路径查找
+
+```python
+paths = query.find_temporal_paths(
+    kg,
+    source="alice",
+    target="beta_ltd",
+    start_time="2022-01-01",
+    end_time="2024-12-31",
+    max_path_length=5,
+    enforce_causal_ordering=True,
+    ordering_strategy="strict",  # strict|overlap|loose
+)
+for p in paths["paths"]:
+    print(f"  {' → '.join(p['path'])}  (length={p['length']})")
+```
+
+### 一致性校验
+
+```python
+from semantica.kg import TemporalGraphQuery
+
+report = TemporalGraphQuery().validate_temporal_consistency(kg)
+
+print(f"Errors:   {len(report.errors)}")
+print(f"Warnings: {len(report.warnings)}")
+
+for err in report.errors:
+    print(f"  [{err['issue_type']}] fact_id={err['fact_id']}: {err['message']}")
+```
+
+报告的错误类型：`inverted_interval`、`invalid_temporal_fields`、`missing_source_entity`、`missing_target_entity`、`source_lifetime_mismatch`、`target_lifetime_mismatch`。
+警告类型：`overlapping_same_edge`、`gap_after_restart`。
+
+
+## TemporalPatternDetector
+
+检测图谱边上重复出现的时序模式。可以直接使用，也可以通过 `TemporalGraphQuery.query_temporal_pattern()` 调用：
+
+```python
+from semantica.kg import TemporalPatternDetector
+
+detector = TemporalPatternDetector()
+
+# Find sequential edge patterns (A→B→C where edges are back-to-back)
+sequences = detector.detect_temporal_patterns(
+    kg,
+    pattern_type="sequence",
+    min_frequency=2,
+    time_window=None,
+)
+
+for seq in sequences:
+    print(f"Sequence: {seq['signature']}  (occurs {seq['frequency']} times)")
+    for occ in seq["occurrences"]:
+        print(f"  nodes={occ['nodes']}  {occ['start_time']} → {occ['end_time']}")
+
+# Find cyclic patterns (A→B→C→A)
+cycles = detector.detect_temporal_patterns(
+    kg,
+    pattern_type="cycle",
+    min_frequency=1,
+)
+```
+
+| 参数 | 类型 | 默认值 | 描述 |
+| :--------- | :---- | :------- | :----------- |
+| `pattern_type` | `str` | `"sequence"` | `"sequence"` 或 `"cycle"` |
+| `min_frequency` | `int` | `2` | 模式被返回所需的最少出现次数 |
+| `time_window` | `Any` | `None` | 模式窗口的可选时间约束 |
+
+每个模式字典包含：`pattern_type`、`signature`（节点 ID 元组）、`frequency`、`occurrences`（列表，含 `nodes`、`edges`、`start_time`、`end_time`）。
+
+
+## Allen 区间代数
+
+`TemporalReasoningEngine` 作用于 `TemporalInterval` 对象——这是一个不可变（frozen）数据类，带有 `start: datetime` 和 `end: datetime | TemporalBound`：
+
+```python
+from semantica.kg import (
+    TemporalReasoningEngine, TemporalInterval, IntervalRelation, TemporalBound
+)
+from datetime import datetime, timezone
+
+def dt(year, month, day):
+    return datetime(year, month, day, tzinfo=timezone.utc)
+
+engine = TemporalReasoningEngine()
+
+h1_2020 = TemporalInterval(start=dt(2020, 1, 1), end=dt(2020, 6, 30))
+q2_q4   = TemporalInterval(start=dt(2020, 4, 1), end=dt(2020, 12, 31))
+
+relation = engine.relation(h1_2020, q2_q4)
+print(relation)                          # IntervalRelation.OVERLAPS
+print(relation.value)                    # "overlaps"
+
+print(engine.overlaps(h1_2020, q2_q4))  # True
+print(engine.contains(q2_q4, h1_2020))  # False
+```
+
+### 全部 13 种关系
+
+| `IntervalRelation` | `.value` | 逆关系 | 描述 |
+| :--- | :--- | :--- | :--- |
+| `BEFORE` | `"before"` | `AFTER` | A 严格在 B 开始之前结束 |
+| `AFTER` | `"after"` | `BEFORE` | A 严格在 B 结束之后开始 |
+| `MEETS` | `"meets"` | `MET_BY` | A 恰好在 B 开始时结束 |
+| `MET_BY` | `"met_by"` | `MEETS` | A 恰好在 B 结束时开始 |
+| `OVERLAPS` | `"overlaps"` | `OVERLAPPED_BY` | A 与 B 共享一段时期；A 先开始也先结束 |
+| `OVERLAPPED_BY` | `"overlapped_by"` | `OVERLAPS` | B 在 A 之前开始并结束，两者共享一段时期 |
+| `STARTS` | `"starts"` | `STARTED_BY` | 开始时间相同；A 比 B 先结束 |
+| `STARTED_BY` | `"started_by"` | `STARTS` | 开始时间相同；B 比 A 先结束 |
+| `DURING` | `"during"` | `CONTAINS` | A 完全位于 B 之内 |
+| `CONTAINS` | `"contains"` | `DURING` | B 完全位于 A 之内 |
+| `FINISHES` | `"finishes"` | `FINISHED_BY` | 结束时间相同；A 比 B 后开始 |
+| `FINISHED_BY` | `"finished_by"` | `FINISHES` | 结束时间相同；B 比 A 后开始 |
+| `EQUALS` | `"equals"` | *(自逆)* | 完全相同的区间 |
+
+### 其他引擎方法
+
+| 方法 | 返回值 | 描述 |
+| :------ | :------- | :----------- |
+| `active_at(interval, timestamp, granularity=None)` | `bool` | `timestamp` 是否位于 `interval` 之内？ |
+| `merge_intervals(intervals)` | `List[TemporalInterval]` | 合并重叠或相接的区间 |
+| `gap_analysis(intervals, domain_start, domain_end)` | `List[TemporalInterval]` | 找出定义域内未被覆盖的空隙 |
+| `coverage_percentage(intervals, domain_start, domain_end)` | `float` | 区间覆盖定义域的比例 |
+| `timeline_of(entity_id, graph)` | `List[Dict]` | 某个实体按时间排序的事件时间线 |
+| `retroactive_coverage(revision, original_facts)` | `Dict` | 按某次修订把事实归类为 `affected`、`partial` 或 `unaffected` |
+| `normalize_timestamp(timestamp, granularity)` | `datetime` | 把时间戳截断到指定粒度 |
+| `normalize_interval(start, end, granularity)` | `TemporalInterval` | 解析区间并扩展到粒度边界 |
+
+### 进阶：区间运算
+
+```python
+from datetime import datetime, timezone
+
+def dt(y, m, d): return datetime(y, m, d, tzinfo=timezone.utc)
+
+intervals = [
+    TemporalInterval(start=dt(2020, 1, 1), end=dt(2020, 6, 30)),
+    TemporalInterval(start=dt(2020, 4, 1), end=dt(2020, 12, 31)),
+    TemporalInterval(start=dt(2021, 3, 1), end=TemporalBound.OPEN),
+]
+
+# Merge overlapping intervals
+merged = engine.merge_intervals(intervals)
+print(f"Merged into {len(merged)} intervals")
+
+# Find gaps in coverage across 2020
+gaps = engine.gap_analysis(intervals, dt(2020, 1, 1), dt(2020, 12, 31))
+print(f"Uncovered gaps: {len(gaps)}")
+
+# Coverage fraction
+pct = engine.coverage_percentage(intervals, dt(2020, 1, 1), dt(2021, 12, 31))
+print(f"Coverage: {pct:.1%}")
+
+# Entity timeline (all add/modify/remove events sorted by time)
+timeline = engine.timeline_of("alice", kg)
+for event in timeline:
+    print(f"  {event['timestamp'].date()}  {event['change_type']}")
+```
+
+
+## TemporalNormalizer——自然语言时序解析
+
+把自然语言时序短语转换为 `(valid_from, valid_until)` datetime 元组。**零 LLM 调用。**纯正则 + `dateutil.relativedelta`。
+
+```python
+from semantica.kg import TemporalNormalizer
+from datetime import datetime, timezone
+
+norm = TemporalNormalizer(
+    reference_date=datetime(2024, 6, 15, tzinfo=timezone.utc)
+)
+```
+
+### `normalize(value)` → `Optional[Tuple[datetime, datetime]]`
+
+```python
+# ISO 8601 → point interval
+result = norm.normalize("2022-03-15")
+print(result)
+# (datetime(2022, 3, 15, tzinfo=utc), datetime(2022, 3, 15, tzinfo=utc))
+
+# Year → full year span
+result = norm.normalize("2022")
+print(result)
+# (datetime(2022, 1, 1, tzinfo=utc), datetime(2022, 12, 31, tzinfo=utc))
+
+# Quarter → quarter span
+result = norm.normalize("Q2 2021")
+print(result)
+# (datetime(2021, 4, 1, tzinfo=utc), datetime(2021, 6, 30, tzinfo=utc))
+
+# Month + year
+result = norm.normalize("January 2022")
+print(result)
+# (datetime(2022, 1, 1, tzinfo=utc), datetime(2022, 1, 31, tzinfo=utc))
+
+# YYYY-MM (ISO partial)
+result = norm.normalize("2022-03")
+print(result)
+# (datetime(2022, 3, 1, tzinfo=utc), datetime(2022, 3, 31, tzinfo=utc))
+
+# Relative phrases (requires reference_date)
+result = norm.normalize("last quarter")
+print(result)
+# (datetime(2024, 1, 1, tzinfo=utc), datetime(2024, 3, 31, tzinfo=utc))
+
+result = norm.normalize("last year")
+# (datetime(2023, 1, 1, tzinfo=utc), datetime(2023, 12, 31, tzinfo=utc))
+
+# Unparseable → None (never raises, logs debug)
+result = norm.normalize("recently")
+print(result)   # None
+```
+
+<Warning>
+  `normalize()` 对无法解析的输入返回 `None`——它**绝不抛出**异常。对于相对短语（`"last quarter"`、`"this year"` 等），**必须**在构造时设置 `reference_date`，否则调用时会抛出 `ValueError`。
+</Warning>
+
+### `normalize_phrase(phrase)` → `Optional[Dict]`
+
+在短语映射表中查找特定领域的时序短语：
+
+```python
+meta = norm.normalize_phrase("expiry date")
+print(meta)
+# {"maps_to": "valid_until", "type": "end", "domain": ["Healthcare", "Supply Chain"]}
+
+meta = norm.normalize_phrase("retroactive to")
+print(meta)
+# {"maps_to": "valid_from", "type": "start", "retroactive": True, "domain": ["Regulatory", "Finance"]}
+
+meta = norm.normalize_phrase("unknown phrase")
+print(meta)   # None
+```
+
+内置领域短语覆盖：通用/策略、医疗健康、网络安全、供应链、金融和能源。
+
+### 自定义短语映射表
+
+```python
+from datetime import datetime, timezone
+
+def my_grant_window(ref: datetime):
+    return (
+        datetime(ref.year, 10, 1, tzinfo=timezone.utc),
+        datetime(ref.year, 10, 31, tzinfo=timezone.utc),
+    )
+
+norm = TemporalNormalizer(
+    reference_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    phrase_map={"grant application window": my_grant_window},
+)
+start, end = norm.normalize("grant application window")
+```
+
+### 支持的表达式
+
+| 模式 | 示例 | 返回类型 |
+| :------- | :------- | :---------- |
+| ISO 8601 完整日期/日期时间 | `"2022-03-15"`、`"2022-03-15T10:00:00Z"` | 点区间 |
+| 仅年份 | `"2022"` | 整年跨度 |
+| 月份 + 年份（单词） | `"January 2022"`、`"Jan 2022"` | 整月跨度 |
+| YYYY-MM（ISO 部分日期） | `"2022-03"` | 整月跨度 |
+| 季度 + 年份 | `"Q2 2021"` | 季度跨度 |
+| 相对表达（内置） | `"last year"`、`"last quarter"`、`"this month"`、`"three months ago"`、`"six months ago"`、`"two years ago"` | 计算得出的跨度 |
+| 有歧义的斜杠日期 | `"03/04/2022"` | `None` + `TemporalAmbiguityWarning` |
+| 领域短语 | `"expiry date"`、`"retroactive to"` | 仅可通过 `normalize_phrase()` |
+
+
+## TemporalQueryRewriter
+
+从自然语言查询中提取时序意图，让下游检索能够应用确定性的时序过滤。
+
+**两种模式：**仅用正则（无 LLM），或由 LLM 辅助处理自由表述。
+
+```python
+from semantica.kg import TemporalQueryRewriter
+
+# Regex-only (default — no dependencies beyond standard library)
+rewriter = TemporalQueryRewriter()
+
+# LLM-assisted for more complex phrasings
+from semantica.llms import Groq
+rewriter = TemporalQueryRewriter(
+    llm_provider=Groq(model="llama-3.1-8b-instant"),
+    reference_date=datetime.now(timezone.utc),
+)
+```
+
+### `rewrite(query, context=None)` → `TemporalQueryResult`
+
+```python
+# "before" intent
+r = rewriter.rewrite("which suppliers were certified before 2021?")
+print(r.temporal_intent)    # "before"
+print(r.at_time.year)       # 2021
+print(r.rewritten_query)    # "which suppliers were certified?"
+print(r.confidence)         # 0.85
+
+# "between" intent
+r = rewriter.rewrite("revenue between Q1 2022 and Q3 2022")
+print(r.temporal_intent)    # "between"
+print(r.start_time)         # datetime(2022, 1, 1, tzinfo=utc)
+print(r.end_time)           # datetime(2022, 9, 30, tzinfo=utc)
+
+# "during" intent
+r = rewriter.rewrite("what decisions were made during Q2 2023?")
+print(r.temporal_intent)    # "during"
+print(r.at_time)            # datetime(2023, 4, 1, tzinfo=utc)
+
+# No temporal phrase
+r = rewriter.rewrite("list all active suppliers")
+print(r.temporal_intent)    # None
+print(r.rewritten_query)    # "list all active suppliers"
+print(r.has_temporal_context())  # False
+```
+
+### `TemporalQueryResult` 字段
+
+| 字段 | 类型 | 描述 |
+| :---- | :---- | :----------- |
+| `rewritten_query` | `str` | 剥离时序短语并规范化空白后的原始查询 |
+| `at_time` | `Optional[datetime]` | `before`、`after`、`at`、`during` 意图的时点边界 |
+| `start_time` | `Optional[datetime]` | `between` 查询的下界 |
+| `end_time` | `Optional[datetime]` | `between` 查询的上界 |
+| `temporal_intent` | `Optional[str]` | `"before"`、`"after"`、`"at"`、`"during"`、`"between"` 之一，或 `None` |
+| `confidence` | `float` | regex 抽取为 `0.85`；LLM 传递的置信度，或回退值 `0.75` |
+
+| 方法 | 返回值 | 描述 |
+| :------ | :------- | :----------- |
+| `has_temporal_context()` | `bool` | 只要提取出任何时序参数即为 `True` |
+
+支持的意图关键词：`before` / `prior to` / `until` / `up to`、`after` / `since` / `following`、`during` / `in` / `within`、`as of` / `at` / `on`、`between … and …`。
+
+
+## TemporalVersionManager
+
+创建并管理带 SHA-256 完整性校验的版本化图谱快照。同时支持**内存**存储（默认）与 **SQLite 持久化**存储。
+
+```python
+from semantica.kg import TemporalVersionManager
+
+# In-memory (default)
+versioner = TemporalVersionManager()
+
+# SQLite-backed (persists across process restarts)
+versioner = TemporalVersionManager(
+    storage_path="graph_versions.db",
+    version_strategy="timestamp",   # timestamp | incremental | semantic
+)
+```
+
+### 方法
+
+| 方法 | 返回值 | 描述 |
+| :------ | :------- | :----------- |
+| `create_snapshot(graph, version_label, author, description)` | `Dict` | 创建带 SHA-256 校验和的快照。`author` 和 `description` 为必填 |
+| `create_version(graph, version_label=None, timestamp=None, metadata=None)` | `Dict` | 轻量版本，无校验和，也不强制填写作者 |
+| `list_versions()` | `List[Dict]` | 列出所有已存储的快照 |
+| `get_version(label)` | `Optional[Dict]` | 按标签获取快照 |
+| `compare_versions(v1, v2, comparison_metrics=None)` | `Dict` | 两个版本或标签之间实体 + 关系的详细差异 |
+| `apply_revision(snapshot, revision)` | `Dict` | 时序修订：取代匹配的事实，但不删除原始记录 |
+| `validate_snapshot(snapshot)` | `bool` | 对照 v1.0 Schema 校验（必填字段 + 类型） |
+| `migrate_snapshot(snapshot)` | `Dict` | 把旧格式快照升级到 v1.0 |
+| `verify_checksum(snapshot)` | `bool` | 通过 SHA-256 进行完整性检查 |
+
+### 快照与差异对比示例
+
+```python
+# Create a snapshot (author and description are required)
+snap = versioner.create_snapshot(
+    kg,
+    version_label="v1.0",
+    author="analyst@example.com",
+    description="Initial baseline",
+)
+print(snap["checksum"])  # SHA-256 hex string
+
+# List versions
+for v in versioner.list_versions():
+    print(f"{v['label']:12s}  {v['author']}  {v['timestamp']}")
+
+# Get a specific version
+past = versioner.get_version("v1.0")
+
+# Diff: compare two versions (pass labels or snapshot dicts)
+diff = versioner.compare_versions("v1.0", "v2.0")
+print(f"Entities added:          {diff['summary']['entities_added']}")
+print(f"Entities removed:        {diff['summary']['entities_removed']}")
+print(f"Relationships added:     {diff['summary']['relationships_added']}")
+print(f"Relationships removed:   {diff['summary']['relationships_removed']}")
+
+# Field-level changes on each modified entity
+for change in diff["entities_modified"]:
+    print(f"  {change['id']}: {change['changes']}")
+```
+
+### 时序修订
+
+对特定的事实 ID 应用修订——原始记录会被**取代**（而不是删除），从而完整保留审计历史：
+
+```python
+revision = {
+    "fact_ids":       ["alice|ceo_of|acme_corp"],   # relationship key: src|type|target
+    "new_valid_from": "2018-03-01",
+    "new_valid_until": None,    # None = TemporalBound.OPEN
+    "revision_type":  "correction",                  # correction | retroactive
+    "author":         "analyst@example.com",
+    "reason":         "Original start date was incorrect",
+}
+
+revised_snapshot = versioner.apply_revision(snap, revision)
+# original fact is preserved with superseded_at set
+# replacement fact has new_valid_from, superseded_at = OPEN
+```
+
+### 完整性与迁移
+
+```python
+# Validate snapshot schema
+is_valid = versioner.validate_snapshot(snap)
+
+# Verify checksum integrity
+is_intact = versioner.verify_checksum(snap)
+
+# Upgrade old-format snapshot (no format_version field)
+upgraded = versioner.migrate_snapshot(old_snap)
+```
+
+
+## Context Graph 时序特性（v0.3.0）
+
+`ContextGraph` 把时序感知能力直接暴露在图谱节点和决策上，自 v0.3.0 起可用：
+
+```python
+from semantica.context import ContextGraph
+from datetime import datetime, timezone
+
+graph = ContextGraph(advanced_analytics=True)
+
+# Add time-bounded nodes
+graph.add_node("policy_v1", "policy",
+               properties={"text": "All transactions require dual approval"},
+               valid_from="2021-01-01",
+               valid_until="2023-06-30")
+
+graph.add_node("policy_v2", "policy",
+               properties={"text": "Transactions > $50k require dual approval"},
+               valid_from="2023-07-01")
+
+# Find nodes active at a specific timestamp
+current_policies = graph.find_active_nodes(
+    node_type="policy",
+    at_time=datetime.now(timezone.utc),
+)
+for p in current_policies:
+    print(p["properties"]["text"])
+# → "Transactions > $50k require dual approval"
+
+# Historical query
+past_policies = graph.find_active_nodes(
+    node_type="policy",
+    at_time=datetime(2022, 6, 1, tzinfo=timezone.utc),
+)
+for p in past_policies:
+    print(p["properties"]["text"])
+# → "All transactions require dual approval"
+```
+
+### 时序决策窗口
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=ContextGraph(),
+    decision_tracking=True,
+)
+
+# Decision superseded after policy change
+old_id = context.record_decision(
+    category="data_retention", scenario="Set retention window for user PII",
+    reasoning="GDPR Article 5(1)(e) limits storage",
+    outcome="retain_90_days", confidence=0.98,
+    valid_from="2023-01-01", valid_until="2023-06-30",
+)
+
+new_id = context.record_decision(
+    category="data_retention", scenario="Set retention window for user PII",
+    reasoning="Legal confirmed 60-day window after new DPA amendment",
+    outcome="retain_60_days", confidence=0.99,
+    valid_from="2023-07-01",
+)
+
+# Temporal precedent search
+old_prec = context.find_precedents("data retention PII", as_of="2023-03-01", limit=3)
+new_prec = context.find_precedents("data retention PII", as_of="2024-01-01", limit=3)
+```
+
+
+## 真实场景模式
+
+<Tabs>
+  <Tab title="人员与组织结构">
+    ```python
+    from semantica.kg import GraphBuilder, TemporalGraphQuery
+
+    builder = GraphBuilder()
+    kg = builder.build(sources=[{
+        "entities": [
+            {"id": "alice",   "type": "Person"},
+            {"id": "finteam", "type": "Team"},
+        ],
+        "relationships": [
+            {"source": "alice", "target": "finteam", "type": "leads",
+             "valid_from": "2020-01-01", "valid_until": "2022-12-31"},
+        ],
+    }])
+
+    query = TemporalGraphQuery()
+
+    # Incident in Nov 2022 → who was responsible?
+    result = query.query_at_time(kg, "", "2022-11-15")
+    leads = [r for r in result["relationships"] if r["type"] == "leads"]
+    print(f"Team lead at incident: {leads[0]['source']}")
+    ```
+  </Tab>
+  <Tab title="策略演化">
+    ```python
+    from semantica.kg import TemporalVersionManager, TemporalGraphQuery
+
+    versioner = TemporalVersionManager(storage_path="policy_history.db")
+    versioner.create_snapshot(kg_before, version_label="2023-H1",
+                              author="compliance@org.com",
+                              description="Pre-July policy baseline")
+    versioner.create_snapshot(kg_after, version_label="2023-H2",
+                              author="compliance@org.com",
+                              description="Post-July amendment")
+
+    diff = versioner.compare_versions("2023-H1", "2023-H2")
+    print(f"Policy changes: {diff['summary']['relationships_modified']}")
+    ```
+  </Tab>
+  <Tab title="一致性审计">
+    ```python
+    from semantica.kg import TemporalGraphQuery
+
+    report = TemporalGraphQuery().validate_temporal_consistency(kg)
+
+    if report.errors:
+        print("ERRORS (must fix):")
+        for e in report.errors:
+            print(f"  [{e['issue_type']}] {e['message']} (fact: {e['fact_id']})")
+
+    if report.warnings:
+        print("WARNINGS (review):")
+        for w in report.warnings:
+            print(f"  [{w['issue_type']}] {w['message']} (fact: {w['fact_id']})")
+    ```
+  </Tab>
+  <Tab title="自然语言查询改写">
+    ```python
+    from semantica.kg import TemporalQueryRewriter, TemporalGraphQuery
+
+    rewriter = TemporalQueryRewriter()
+    query    = TemporalGraphQuery()
+
+    user_query = "Who was responsible for compliance before the 2022 audit?"
+    result = rewriter.rewrite(user_query)
+
+    if result.has_temporal_context():
+        # Use point-in-time filtering
+        snapshot = query.reconstruct_at_time(kg, result.at_time)
+    else:
+        snapshot = kg
+
+    # Now run your retrieval over snapshot with result.rewritten_query
+    print(f"Intent: {result.temporal_intent}")
+    print(f"Query:  {result.rewritten_query}")
+    ```
+  </Tab>
+</Tabs>
+
+
+## 配置
+
+```yaml
+kg:
+  temporal:
+    enabled: true
+    default_validity: infinite        # OPEN when valid_until is omitted
+    recorded_at_auto_stamp: true      # auto-fill recorded_at on every ingested fact
+    reasoning:
+      enabled: true
+      granularity: day                # second|minute|hour|day|week|month|year
+      engine: allen                   # allen | point_in_time_only
+```
+
+- [Knowledge Graph 模块](kg)——核心图谱构建、`GraphBuilder` 与图分析。
+- [Context 模块](context)——决策时序窗口与 `find_active_nodes()`。
+- [溯源](provenance)——与时序元数据一同打上的 W3C PROV-O 数据血缘。
+- [导出](export)——带时序注解的 OWL、Turtle、JSON-LD 与 Parquet 导出。
+
+- [时序知识图谱](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/10_Temporal_Knowledge_Graphs.ipynb)——时序推理与 Allen 代数 · 高级
+- [Context Module](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/19_Context_Module.ipynb)——包含时序决策窗口 · 中级

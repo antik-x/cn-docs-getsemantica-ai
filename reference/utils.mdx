@@ -1,0 +1,221 @@
+---
+title: "Utils 模块"
+description: "用于日志记录、校验、错误处理、进度追踪与常见操作的共享工具。"
+icon: "wrench"
+---
+
+**`semantica.utils`** 提供 Semantica 各处使用的**共享基础设施**：
+
+- 结构化日志：`setup_logging()`、`get_logger()`、`log_execution_time` 装饰器
+- 校验辅助函数：`validate_entity()` 与 `validate_config()` 返回 `(bool, Optional[str])`，不会抛出异常
+- 进度追踪：`ProgressTracker` 类，以及带预计剩余时间（ETA）的可迭代包装器 `track_progress()`
+- 类型化异常：`SemanticaError`、`ValidationError`、`ProcessingError`、`ConfigurationError`、`QualityError`
+
+大多数用户不会直接调用 utils：它是所有模块的**共享基础**。
+
+
+## 导出类
+
+| 名称 | 类型 | 作用 |
+| :--- | :--- | :--- |
+| `setup_logging` | 函数 | 配置 `semantica` 根日志器：接受 `level`、`file`、`console`、`rotation` 关键字参数 |
+| `get_logger` | 函数 | 获取具名日志器实例（`semantica.<name>`） |
+| `log_execution_time` | 装饰器 | 包装函数：记录名称、执行时间与成功/失败 |
+| `log_performance` | 函数 | 记录预先收集的性能指标：`log_performance(func_name, execution_time, **metrics)` |
+| `validate_entity` | 函数 | 校验实体字典：返回 `(bool, Optional[str])`；不抛出异常 |
+| `validate_config` | 函数 | 校验配置字典：返回 `(bool, Optional[str])`；不抛出异常 |
+| `ProgressTracker` | 类 | 基于类的进度追踪器，带 ETA 与步骤回调 |
+| `track_progress` | 函数 | 用实时进度条包装任意可迭代对象 |
+| `clean_text` | 函数 | 规范化空白字符并去除零宽控制字符 |
+| `hash_data` | 函数 | 对 `str`、`bytes` 或 `dict` 计算确定性的 SHA-256 哈希 |
+| `SemanticaError` | 异常 | 所有 Semantica 错误的基础异常 |
+| `ValidationError` | 异常 | 输入未通过校验时抛出；带 `.field`、`.value`、`.message` |
+| `ProcessingError` | 异常 | 在抽取、图谱构建或流水线步骤期间抛出；带 `.stage` |
+| `ConfigurationError` | 异常 | 配置校验失败时抛出 |
+| `QualityError` | 异常 | 数据质量低于阈值时抛出 |
+
+## 你将获得
+
+- **日志** —— 使用 `@log_execution_time` 装饰器的结构化日志，以及通过环境变量控制的质量指标。
+- **校验** —— `validate_entity` 与 `validate_config`，配套携带字段与值上下文的类型化 `ValidationError`。
+- **进度追踪** —— `track_progress` 包装任意可迭代对象：自动检测终端还是 Jupyter，并选用合适的渲染器。
+- **辅助函数** —— `clean_text`、`hash_data`、`safe_filename`，以及框架各处使用的嵌套字典工具。
+- **异常层级** —— `SemanticaError` → `ValidationError`、`ProcessingError`：用于针对性恢复的类型化异常。
+- **文件工具** —— `read_json_file` 失败时抛出 `FileNotFoundError` 或 `json.JSONDecodeError`：围绕 JSON 读写无需样板化的 try/except。
+
+## 日志记录
+
+<Steps>
+  <Step title="在应用启动时初始化日志">
+    ```python
+    from semantica.utils import setup_logging, get_logger
+
+    setup_logging(level="INFO")   # "DEBUG" | "INFO" | "WARNING" | "ERROR"
+    logger = get_logger(__name__)
+    ```
+
+    <Warning>
+      **在应用启动时调用一次 `setup_logging(level="INFO")`。** 否则 Semantica 会退回到 Python 根日志器，它可能是静默的或配置不当的。请在导入其他 Semantica 模块之前调用，以捕获初始化消息。
+    </Warning>
+  </Step>
+  <Step title="用性能装饰器为耗时函数插桩">
+    ```python
+    from semantica.utils import log_execution_time
+
+    @log_execution_time
+    def expensive_step(data):
+        ...
+    # Logs: "expensive_step completed in 2.34s"
+    ```
+
+    <Tip>
+      **`@log_execution_time` 就是那个性能装饰器。** 把它应用到任意函数上，即可自动记录其名称、执行时间与成功/失败。`log_performance` 是更低层级的函数，用于记录你已经收集好的指标：它不是装饰器。
+    </Tip>
+  </Step>
+  <Step title="通过环境变量配置">
+    ```bash
+    export SEMANTICA_LOG_LEVEL=DEBUG
+    export SEMANTICA_LOG_FORMAT=json     # "json" | "text"
+    export SEMANTICA_DISABLE_PROGRESS=true
+    export SEMANTICA_FORCE_PROGRESS=true
+    ```
+
+    <Tip>
+      **进度条跟随你的终端。** 只有当 stdout 是交互式终端（或 Jupyter notebook）时才会输出控制台进度，因此通过管道或重定向输出时，日志不会再被进度条和转义序列填满。设置 `SEMANTICA_DISABLE_PROGRESS` 可让你即使在终端中也关闭进度显示，或设置 `SEMANTICA_FORCE_PROGRESS` 在 stdout 被重定向时仍保留进度。两者同时设置时，`SEMANTICA_DISABLE_PROGRESS` 优先。
+    </Tip>
+  </Step>
+</Steps>
+
+## 校验
+
+```python
+from semantica.utils import validate_entity, validate_config, ValidationError
+
+# validate_entity returns (is_valid, error_message)
+is_valid, error = validate_entity({"id": "1", "type": "PERSON", "text": "Alice"})
+if not is_valid:
+    raise ValidationError(error)
+
+# validate_config returns (is_valid, error_message)
+is_valid, error = validate_config(config, required_keys=["model", "provider"])
+if not is_valid:
+    print(f"Invalid config: {error}")
+```
+
+| 函数 | 描述 | 返回值 |
+| :-------- | :----------- | :------- |
+| `validate_entity(data)` | 检查实体字典是否具有**必填**字段（`id`、`text`、`type`）且类型正确 | `Tuple[bool, Optional[str]]` |
+| `validate_config(cfg, required_keys=None)` | 检查配置字典；可选地强制要求**必填**键 | `Tuple[bool, Optional[str]]` |
+
+## 进度追踪
+
+```python
+from semantica.utils import track_progress
+
+# Wraps any iterable: auto-detects console vs Jupyter
+for item in track_progress(items, desc="Processing documents"):
+    process(item)
+```
+
+支持：
+
+- **终端**：带 ETA 的 tqdm 进度条
+- **Jupyter**：notebook 兼容的部件（自动检测）
+- **文件**：将进度写入日志文件
+
+<Tip>
+  **`track_progress` 会自动检测 Jupyter。** 在终端中它渲染 tqdm 进度条；在 Jupyter notebook 中它渲染交互式部件。你无需检查环境：同一次调用在两者中都可用。
+</Tip>
+
+## 辅助函数
+
+```python
+from semantica.utils import clean_text, hash_data, safe_filename
+
+# Normalize whitespace and strip control characters
+clean = clean_text("  Hello   World  ")     # -> "Hello World"
+
+# Deterministic SHA-256 hash of a string, bytes, or dict
+uid   = hash_data({"key": "value"})         # -> hex digest string
+
+# Sanitize a string for use as a filename
+fname = safe_filename("My File?.txt")       # -> "My_File.txt"
+```
+
+<Tip>
+  **`hash_data()` 跨运行保持确定性。** 给定相同的输入字典（任何可 JSON 序列化的对象），`hash_data()` 总是返回相同的 SHA-256 十六进制字符串：适合用作流水线步骤中的缓存键或幂等令牌。
+</Tip>
+
+## 嵌套字典工具
+
+用于深层配置访问的辅助函数：在 `Config` 与 `ConfigManager` 内部被大量使用：
+
+```python
+from semantica.utils import get_nested_value, set_nested_value, merge_dicts
+
+config = {
+    "processing": {"batch_size": 32, "max_workers": 4},
+    "llm":        {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+}
+
+# Dot-notation read: returns default if key path is absent
+batch = get_nested_value(config, "processing.batch_size", default=16)
+# -> 32
+
+# Dot-notation write
+set_nested_value(config, "processing.batch_size", 64)
+
+# Deep merge: nested keys are merged recursively (deep=True by default)
+base      = {"a": {"x": 1, "y": 2}, "b": 3}
+overrides = {"a": {"y": 99, "z": 4}, "c": 5}
+merged    = merge_dicts(base, overrides)
+# -> {"a": {"x": 1, "y": 99, "z": 4}, "b": 3, "c": 5}
+```
+
+## 异常层级
+
+<AccordionGroup>
+  <Accordion title="异常类型及其抛出时机">
+
+```python
+from semantica.utils import SemanticaError, ValidationError, ProcessingError
+
+try:
+    run_pipeline(data)
+except ValidationError as e:
+    # Input data did not pass schema validation
+    logger.error("Validation failed: %s", e.message)
+except ProcessingError as e:
+    # Failure during extraction or graph construction
+    logger.error("Processing failed at stage %s: %s", e.stage, e)
+except SemanticaError as e:
+    # Catch-all for all Semantica framework errors
+    logger.error("Framework error: %s", e)
+```
+
+| 异常 | 抛出时机 | 关键属性 |
+| :--------- | :----------- | :-------------- |
+| `SemanticaError` | 基类：所有框架错误都继承自它 | `.message`、`.context`、`.error_code` |
+| `ValidationError` | 输入数据未通过 Schema 或类型校验 | `.field`、`.value`、`.constraint` |
+| `ProcessingError` | 在抽取、图谱构建或流水线步骤期间失败 | `.stage`、`.input_data`、`.output_data` |
+| `ConfigurationError` | 配置键缺失或类型错误 | `.config_key`、`.config_value`、`.expected_type` |
+| `QualityError` | 数据质量分数低于阈值 | `.quality_score`、`.threshold`、`.metrics` |
+
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  **把 `SemanticaError` 当作最宽的异常捕获网。** 所有框架错误都继承自 `SemanticaError`，因此 `except SemanticaError` 能捕获校验失败、处理错误以及介于两者之间的一切。需要针对性恢复逻辑时，请使用具体的子类。
+</Tip>
+
+## 文件工具
+
+```python
+from semantica.utils import read_json_file
+
+# Read and parse a JSON file: raises FileNotFoundError or json.JSONDecodeError on failure
+config = read_json_file("config.json")
+```
+
+- [Core](core)——内部使用 Utils 的框架编排模块。
+- [Pipeline](pipeline)——使用 ProgressTracker 进行逐步追踪。

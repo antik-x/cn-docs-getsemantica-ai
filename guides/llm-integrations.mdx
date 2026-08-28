@@ -1,0 +1,597 @@
+---
+title: "LLM 集成"
+description: "通过统一接口将 Semantica 连接到 Groq、OpenAI、Anthropic、HuggingFace、Novita AI 以及 100 多家 LLM 提供商。"
+---
+
+Semantica 通过 LiteLLM 在 Groq、OpenAI、Anthropic Claude、HuggingFace、Novita AI 以及 100 多家提供商之上提供统一的提供商接口——只需一个 `.generate()` 方法。当你需要出于延迟、准确率、成本或数据驻留方面的考虑更换提供商，又不想改动应用代码时，就可以使用它。
+
+## 什么是 LLM 集成？
+
+`semantica.llms` 模块提供了一个统一接口，用于连接各大语言模型（LLM）提供商。你无需逐一学习每家提供商不同的 API，无论调用的是 Groq、OpenAI、Anthropic 还是本地 HuggingFace 模型，使用的都是相同的方法（`.generate()`、`.generate_structured()`）。
+
+**跨提供商的统一接口：** Semantica 中的所有 LLM 提供商都暴露完全相同的方法，因此从 OpenAI 切换到 Anthropic 只需更改提供商构造函数，无需改动应用代码。
+
+**提供商包装类与语义抽取中的提供商字符串：** `semantica.llms` 中的类（`Groq`、`OpenAI`、`LiteLLM`、`HuggingFaceLLM`）是用于文本生成的 Python 对象。而 `semantica.semantic_extract` 模块在进行实体和关系抽取时接受字符串形式的提供商名称。本指南对这两种方式都有介绍。
+
+## 为什么使用 LLM 集成？
+
+**提供商可移植性。** 用一家提供商测试，用另一家部署。原型阶段用 Groq，生产环境切换到 Anthropic，代码无需任何改动。
+
+**降低供应商锁定。** 避免把应用绑定在单一 LLM 提供商的 API 上。一旦定价变动或服务可用性出现问题，切换提供商也十分简单。
+
+**一致的 API。** 在所有提供商上使用相同的 `.generate()` 和 `.generate_structured()` 方法，无需学习各家特有的接口。
+
+**多提供商工作流。** 在同一条流水线中，用快速模型做初始分类，用昂贵的前沿模型做复杂推理。
+
+**本地与云端部署的灵活性。** 开发阶段使用云端提供商，物理隔离的生产环境则切换到本地 HuggingFace 模型。
+
+## 何时使用 / 何时不使用
+
+**适合使用 LLM 集成的场景：**
+- 文本生成、摘要与问答任务
+- 需要自然语言理解的复杂推理
+- 从非结构化文本中抽取结构化数据
+- 需要解释与综合的多步分析
+- 上下文、歧义或领域知识会影响结果的任务
+
+**确定性工具可能更合适的场景：**
+- 正则表达式能处理的模式匹配
+- 标准清晰的简单规则分类
+- 数学计算或统计分析
+- 图遍历与关系查询
+- 逻辑已知的数据变换
+
+**可能用不着完整 LLM 的场景：**
+- 简单的关键词搜索或精确字符串匹配
+- 使用预定义决策树的确定性工作流
+- 推理开销举足轻重的高频低延迟操作
+- 可解释性要求逻辑透明、基于规则的任务
+
+<Info>
+  `semantica.llms` 中的提供商（`Groq`、`OpenAI`、`LiteLLM`、`HuggingFaceLLM`）用于文本生成和 `query_with_reasoning()`。若要进行结构化的实体与关系抽取，`semantica.semantic_extract` 接受字符串形式的提供商名称。这里对两种模式都有介绍。
+</Info>
+
+## 选择提供商
+
+提供商的选择取决于四个因素，各自适用于不同的使用场景：
+
+**延迟**在实时 SOC 分诊回路中最为关键，因为分析师正在等待分诊结论。Groq 的推理基础设施通常能在 300 毫秒内返回 8B 模型的响应，因此非常适合交互式工作流。
+
+**准确率**在高风险决策中最为重要：临床禁忌核查、信贷委员会推理、法律文件分析。通过 `LiteLLM` 可用的 Claude 或 GPT-4 等前沿模型能提供最强的推理能力。
+
+**数据驻留**限制会让涉密或受 HIPAA 监管的工作负载无法使用云端提供商。`HuggingFaceLLM` 配合本地模型路径，可以实现完全不发起网络调用的物理隔离部署。
+
+**规模化成本**则倾向于 Novita AI 这类高吞吐提供商，适合每小时处理数千份文档、按 Token 计费的成本快速累积的批量抽取流水线。
+
+有了统一接口，你可以用 Groq 追求速度做原型、用 Claude 验证准确率、为满足合规要求部署到 Azure OpenAI——全程无需改动应用代码。
+
+## 共享接口
+
+每个提供商都暴露相同的两个方法：
+
+```python
+provider.generate(prompt: str, **kwargs) -> str
+provider.generate_structured(prompt: str, **kwargs) -> dict
+provider.is_available() -> bool
+```
+
+`generate()` 返回纯字符串。`generate_structured()` 指示模型以 JSON 响应，并返回解析后的 `dict`。`is_available()` 让你在正式调用之前对提供商做健康检查——在重试逻辑和预热检查中很有用。
+
+这意味着 Semantica 中所有接受 LLM 的地方——`query_with_reasoning()`、语义抽取、自定义推理回路——都可以互换使用这些提供商中的任意一个。
+
+## Groq——面向实时智能体的快速推理
+
+**Groq** 是一家云提供商，专注于使用名为语言处理单元（LPU）的定制硬件实现超快速的语言模型推理。其基础设施能为较小的模型带来低于 300 毫秒的响应时间，因此非常适合速度比极致推理能力更重要的实时应用。
+
+Groq Cloud 在专门构建的语言处理单元上运行开放模型，为 8B 参数模型提供低于 300 毫秒的延迟。这使得 Groq 成为任何 LLM 处于热路径上的智能体回路的理想默认选择——SOC 分诊、实时告警分类、对话式智能体。
+
+```python
+from semantica.llms import Groq
+
+# api_key falls back to the GROQ_API_KEY environment variable
+groq = Groq(model="llama-3.1-8b-instant", api_key="YOUR_GROQ_KEY")
+
+# Always health-check before the first call in a long-running process
+if not groq.is_available():
+    raise RuntimeError("Groq provider unreachable — check GROQ_API_KEY")
+
+# Plain generation
+verdict = groq.generate(
+    "Alert: 4200 LDAP objects enumerated in 8s from ws-finance-03. "
+    "True positive or false positive? One sentence.",
+    temperature=0.1,    # low temperature for deterministic triage verdicts
+)
+print(verdict)
+# "True positive — volume and speed are consistent with T1087.002 domain enumeration."
+
+# Structured extraction — returns a parsed dict
+entities = groq.generate_structured(
+    "Extract threat actors and CVEs from: "
+    "APT29 exploited CVE-2024-3400 in PAN-OS GlobalProtect."
+)
+# {"threat_actors": ["APT29"], "cves": ["CVE-2024-3400"], "products": ["PAN-OS GlobalProtect"]}
+```
+
+Groq 模型的选择归根结底是速度与能力之间的权衡：热路径上的任何任务都用 `llama-3.1-8b-instant`，需要更强推理能力且能接受稍高延迟时用 `llama-3.3-70b-versatile`，长上下文摘要任务用 `mixtral-8x7b-32768`。
+
+## OpenAI——函数调用与视觉
+
+**OpenAI** 提供对 GPT 模型系列的访问，包括具备函数调用（结构化工具使用）以及图像与文档视觉处理等高级能力的 GPT-4o。OpenAI 模型非常适合需要强大语言理解与生成能力的复杂推理任务。
+
+`OpenAI` 提供商封装了 OpenAI API。当你需要 GPT-4o 精确的函数调用能力、处理文档截图的视觉能力，或者你的团队已经签有 OpenAI 合同并希望继续沿用时，就选它。
+
+```python
+from semantica.llms import OpenAI
+
+oai = OpenAI(model="gpt-4o", api_key="YOUR_OAI_KEY")
+# api_key falls back to OPENAI_API_KEY environment variable
+
+response = oai.generate(
+    "Under CRR2 Article 92, what is the minimum total capital ratio "
+    "for a G-SIB subject to a 2% GSIB buffer surcharge?"
+)
+print(response)
+
+# Structured output — useful for deterministic data extraction
+risk_data = oai.generate_structured(
+    "Extract all counterparty names and exposure amounts from: "
+    "Counterparty A: 45M EUR notional, Counterparty B: 12M EUR notional, "
+    "Counterparty C: 89M EUR notional."
+)
+# {"counterparties": [{"name": "Counterparty A", "exposure_eur": 45000000}, ...]}
+```
+
+默认模型 `gpt-3.5-turbo` 足以胜任分类和轻量抽取。复杂的监管多步推理或文档理解则应切换到 `gpt-4o`。
+
+## LiteLLM——一个接口，100 多家提供商
+
+**LiteLLM** 是一个通用适配器，为 100 多家不同的 LLM 提供商提供单一接口，包括 Anthropic Claude、Azure OpenAI、AWS Bedrock、Google Vertex AI 以及本地 Ollama 实例。它充当转换层，把统一的 API 调用转换为各家提供商特定的请求，让你无需改动代码即可轻松切换提供商。
+
+`LiteLLM` 是一把瑞士军刀。它封装了 `litellm` 库，后者通过统一的补全 API 与所有主要提供商通信。模型字符串同时编码了提供商与模型名称：`"anthropic/claude-sonnet-4-20250514"`、`"azure/gpt-4o"`、`"bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"`、`"ollama/llama3.2"`。改字符串就是换提供商——其他代码一概不用动。
+
+```python
+from semantica.llms import LiteLLM
+
+# Anthropic Claude — highest accuracy for complex reasoning
+llm = LiteLLM(model="anthropic/claude-sonnet-4-20250514")
+# Reads ANTHROPIC_API_KEY from environment
+
+# Azure OpenAI — compliance and data-residency requirements
+llm = LiteLLM(model="azure/gpt-4o", api_key="YOUR_AZURE_KEY")
+
+# AWS Bedrock — existing cloud agreement, no new vendor
+llm = LiteLLM(model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0")
+
+# Google Vertex AI
+llm = LiteLLM(model="vertex_ai/gemini-1.5-pro")
+
+# Ollama — fully local, no network calls
+llm = LiteLLM(model="ollama/llama3.2")
+
+# All of them: same call
+response = llm.generate("Summarise the ICH E6(R2) GCP guideline key requirements.")
+```
+
+各家提供商的环境变量约定：`ANTHROPIC_API_KEY`、`AZURE_API_KEY`、`OPENAI_API_KEY`、`GOOGLE_APPLICATION_CREDENTIALS` 等，LiteLLM 会自动读取。如果提供商切换由部署环境决定，你可以把提供商选择放在配置字典里，在启动时注入——应用代码中不会出现任何 `if/else` 分支：
+
+```python
+import os
+
+PROVIDER_MAP = {
+    "prod":    "anthropic/claude-sonnet-4-20250514",
+    "staging": "openai/gpt-4o-mini",
+    "local":   "ollama/llama3.2",
+    "azure":   "azure/gpt-4o",
+}
+
+env = os.getenv("DEPLOY_ENV", "local")
+llm = LiteLLM(model=PROVIDER_MAP[env])
+# The rest of the application never touches provider names
+```
+
+## HuggingFaceLLM——物理隔离与本地部署
+
+**HuggingFaceLLM** 提供对 HuggingFace 生态中开源模型的访问，既可以从 HuggingFace Hub 下载，也可以从本地文件路径加载。对于推理期间完全无法访问网络的离线部署——例如涉密环境或物理隔离系统——这是唯一的选择。
+
+`HuggingFaceLLM` 从 HuggingFace Hub 或本地目录路径加载模型，推理期间不发起任何网络调用。对于涉密环境、受 HIPAA 约束的临床部署，以及任何没有出站互联网访问的网络段，这是唯一的选择。
+
+```python
+from semantica.llms import HuggingFaceLLM
+
+# HuggingFace Hub — authentication via HF_TOKEN environment variable
+hf = HuggingFaceLLM(model="mistralai/Mistral-7B-Instruct-v0.3")
+
+# Biomedical fine-tuned model for clinical entity extraction
+bio_llm = HuggingFaceLLM(model="aaditya/Llama3-OpenBioLLM-70B")
+
+# Air-gapped deployment — model on local NFS share or mounted volume
+# Both `model` and `model_name` are accepted as constructor parameters
+air_gapped_llm = HuggingFaceLLM(model="/opt/models/llama-3.1-70b-instruct")
+
+response = air_gapped_llm.generate(
+    "Summarise SIGINT collection window 2024-Q3 for APT29 C2 infrastructure.",
+    max_length=512,
+)
+```
+
+在环境中设置 `HF_TOKEN`，以便从 Hub 访问受限（gated）或私有模型。本地路径则无需令牌——模型目录中必须包含标准的 HuggingFace checkpoint 文件。
+
+## 无需更改应用代码即可切换提供商
+
+统一接口的真正回报体现在 `query_with_reasoning()` 上。每个 `AgentContext` 中驱动基于图谱推理的正是这个调用。由于它接受任意提供商对象，你可以在流水线的任何一层换用不同的 LLM，而周围的代码零改动。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.llms import Groq, LiteLLM
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph(advanced_analytics=True)
+context = AgentContext(vector_store=vs, knowledge_graph=graph, graph_expansion=True)
+
+# Load your knowledge base once
+context.store(
+    [
+        {"content": "APT29 exploits CVE-2024-3400 in PAN-OS GlobalProtect — CVSS 10.0",
+         "metadata": {"source": "nvd", "actor": "APT29"}},
+        {"content": "NOBELIUM (APT29) leverages OAuth token theft against Azure AD tenants",
+         "metadata": {"source": "msft_blog_2023", "actor": "APT29", "technique": "T1528"}},
+    ],
+    extract_entities=True,
+    extract_relationships=True,
+)
+
+query = "What is APT29's current exploitation methodology and what cloud services are targeted?"
+
+# Tier 1: fast answer with Groq (< 300ms)
+fast_llm = Groq(model="llama-3.1-8b-instant", api_key="YOUR_GROQ_KEY")
+fast_result = context.query_with_reasoning(query, llm_provider=fast_llm, max_results=5)
+print("FAST: {}  (conf={:.0%})".format(fast_result["response"], fast_result["confidence"]))
+
+# Tier 2: deep answer with Claude if confidence is below threshold
+if fast_result["confidence"] < 0.85:
+    deep_llm = LiteLLM(model="anthropic/claude-sonnet-4-20250514")
+    deep_result = context.query_with_reasoning(
+        query, llm_provider=deep_llm, max_results=15, max_hops=3
+    )
+    print("DEEP: {}  (conf={:.0%})".format(deep_result["response"], deep_result["confidence"]))
+```
+
+`context`、图谱、检索逻辑——全都保持不变。两个层级之间只有 `llm_provider` 参数不同。
+
+## 将提供商用于语义抽取
+
+对于命名实体识别（NER）、关系抽取和三元组（Triplet）抽取，Semantica 的 `semantica.semantic_extract` 模块接受字符串形式的提供商名称，而非类实例。提供商的实例化由模块在内部处理。
+
+```python
+from semantica.semantic_extract import NamedEntityRecognizer, EventDetector
+from semantica.semantic_extract.methods import (
+    extract_entities_llm,
+    extract_relations_llm,
+    extract_triplets_llm,
+)
+
+# NER with Groq — provider name as a string
+ner = NamedEntityRecognizer(
+    methods=["llm"],
+    provider="groq",
+    llm_model="llama-3.1-8b-instant",
+)
+entities = ner.extract_entities(
+    "APT29 exploited CVE-2024-3400 in PAN-OS GlobalProtect to compromise NATO member networks."
+)
+for e in entities:
+    # Entity fields: .text, .label, .confidence
+    print("{} ({}) — conf={:.2f}".format(e.text, e.label, e.confidence))
+# APT29 (THREAT_ACTOR) — conf=0.96
+# CVE-2024-3400 (CVE) — conf=0.99
+# PAN-OS GlobalProtect (PRODUCT) — conf=0.94
+# NATO (ORGANIZATION) — conf=0.91
+
+# Event detection with the same provider pattern
+detector = EventDetector(method="llm", provider="groq")
+events = detector.detect_events(
+    "ENISA published the Threat Landscape 2024 report on October 22nd, "
+    "covering 11 primary threat categories including ransomware and supply-chain attacks."
+)
+
+# Triplet extraction — returns (subject, predicate, object) triples
+text = "Warfarin inhibits VKORC1 enzyme activity, reducing vitamin K-dependent clotting factor synthesis."
+triplets = extract_triplets_llm(text, provider="groq", model="llama-3.1-8b-instant")
+for t in triplets:
+    print("{} -> {} -> {}".format(t.subject, t.predicate, t.object))
+# warfarin -> inhibits -> VKORC1 enzyme activity
+# warfarin -> reduces -> vitamin K-dependent clotting factor synthesis
+```
+
+## Novita AI——高性价比的大规模抽取
+
+Novita AI 暴露兼容 OpenAI 的 API，并作为抽取层的内置提供商提供。它的访问方式与 `semantica.llms` 中的类不同——需要通过 `semantica.semantic_extract.providers` 中的 `create_provider`——因此对于单次调用成本举足轻重的大规模 NER 流水线，它是合适的选择。
+
+```python
+from semantica.semantic_extract.providers import create_provider
+from semantica.semantic_extract import NamedEntityRecognizer
+
+# create_provider pools instances — same key reuses the same object
+provider = create_provider(
+    "novita",
+    api_key="YOUR_NOVITA_KEY",       # or set NOVITA_API_KEY env var
+    model="deepseek/deepseek-v3.2",  # default model
+)
+
+if provider.is_available():
+    # Plain generation
+    response = provider.generate("Summarise the Basel III leverage ratio requirement.")
+
+    # Structured extraction — returns parsed dict
+    data = provider.generate_structured(
+        "Extract drug names and dosages from: "
+        "Patient received warfarin 5mg daily, aspirin 75mg daily, metformin 500mg twice daily."
+    )
+
+# Use Novita through the NER interface — provider name as string
+ner = NamedEntityRecognizer(
+    methods=["llm"],
+    provider="novita",
+    llm_model="deepseek/deepseek-v3.2",
+)
+entities = ner.extract_entities(
+    "CVE-2024-3400 is exploited by UNC3886 targeting PAN-OS GlobalProtect."
+)
+for e in entities:
+    print("{} ({}) — conf={:.2f}".format(e.text, e.label, e.confidence))
+```
+
+Novita 底层依赖 `openai` Python 客户端——请通过 `pip install "semantica[llm-openai]"` 或 `pip install openai` 安装。
+
+## 领域示例
+
+<Tabs>
+<Tab title="国防——CTI/威胁">
+某涉密威胁情报分析部门需要完全以物理隔离方式运行——不产生任何出站网络流量。抽取模型和推理模型都从本地 NFS 共享加载。知识图谱（Knowledge Graph）在分析会话期间不断累积；所有推理都在本地环境内完成。
+
+```python
+from semantica.llms import HuggingFaceLLM
+from semantica.semantic_extract import NamedEntityRecognizer
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+# Both models load from the air-gapped NFS share — no Hub calls
+extraction_llm = HuggingFaceLLM(model="/opt/models/mistral-7b-instruct")
+reasoning_llm  = HuggingFaceLLM(model="/opt/models/llama-3.1-70b-instruct")
+
+# The llms module wrappers can also be used directly for raw prompt generation
+# when you want to bypass the semantic extraction layer entirely
+
+sigint_text = (
+    "[S//NF] APT29 operator observed deploying WARPWIRE credential harvester "
+    "via CVE-2024-3400 on perimeter VPN gateways of target BRAVO-7."
+)
+
+# For fully local models, call the provider's generate method directly
+raw_entities = extraction_llm.generate(
+    "Extract all threat actors, CVEs, malware names, and target identifiers "
+    "from the following text as a JSON list:\n\n" + sigint_text
+)
+
+# Build the graph and run reasoning
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    decision_tracking=True,
+)
+
+context.store(
+    sigint_text,
+    metadata={"source": "SIGINT_Q4_2024", "classification": "SECRET//NOFORN"},
+    conversation_id="op-analysis-q4",
+)
+
+result = context.query_with_reasoning(
+    "What credential-harvesting capabilities has APT29 deployed against "
+    "perimeter VPN gateways and what CVEs enable initial access?",
+    llm_provider=reasoning_llm,   # fully local — no network calls
+    max_results=10,
+    max_hops=3,
+)
+print(result["response"])
+print("Confidence: {:.0%}".format(result["confidence"]))
+
+context.save("./classified_output/q4_analysis/")
+```
+
+</Tab>
+
+<Tab title="安全——SOC/事件">
+某 SOC 流水线在不同层级使用两家提供商：用 Groq 做 500 毫秒以内的初始分诊，保证分析师的工作节奏不被打断；当 Tier 1 置信度低于升级阈值时，再用 Anthropic Claude 做深度 ATT&CK 分析。提供商切换由程序自动决定——无需人工交接。
+
+```python
+from semantica.llms import Groq, LiteLLM
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph()
+context = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    decision_tracking=True,
+)
+
+# Preload MITRE ATT&CK runbook knowledge
+context.store([
+    "T1087.002 (Domain Account Discovery): anomalous LDAP enumeration — isolate source host, reset service account passwords",
+    "T1053.005 (Scheduled Task/Job): encoded PowerShell via wmiprvse.exe — collect task XML, check persistence keys, notify IR",
+    "T1021.002 (SMB/Windows Admin Shares): PsExec lateral movement to DC — immediate host isolation, reset service accounts",
+])
+
+alert = (
+    "SIEM Alert: host ws-finance-03, user jsmith — scheduled task with base64-encoded PowerShell. "
+    "Parent process: wmiprvse.exe. Sigma: T1053.005. Time: 2025-06-21T09:14:32Z."
+)
+context.store(alert, metadata={"type": "alert", "severity": "high"})
+
+# Tier 1: fast triage with Groq — target < 500ms end-to-end
+fast_llm = Groq(model="llama-3.1-8b-instant", api_key="YOUR_GROQ_KEY")
+triage = context.query_with_reasoning(
+    "Is this alert a true positive? One sentence verdict and confidence.",
+    llm_provider=fast_llm,
+    max_results=5,
+)
+print("TRIAGE: {} (conf={:.0%})".format(triage["response"], triage["confidence"]))
+
+# Tier 2: escalate to Claude for deep analysis if Tier 1 is uncertain
+if triage["confidence"] < 0.88:
+    deep_llm = LiteLLM(model="anthropic/claude-sonnet-4-20250514")
+    deep = context.query_with_reasoning(
+        "Full MITRE ATT&CK analysis of this alert: identify the attack chain, "
+        "blast radius, affected systems, and recommended containment steps.",
+        llm_provider=deep_llm,
+        max_results=15,
+        max_hops=3,
+    )
+    print("DEEP ANALYSIS: {}".format(deep["response"]))
+
+    context.record_decision(
+        category="escalation",
+        scenario="Scheduled task T1053.005 on ws-finance-03 — Tier 1 conf {:.0%}".format(triage["confidence"]),
+        reasoning=deep["reasoning_path"],
+        outcome="escalated_tier2",
+        confidence=deep["confidence"],
+        entities=["ws-finance-03", "jsmith", "T1053.005"],
+        decision_maker="soc_pipeline_v3",
+    )
+```
+
+</Tab>
+
+<Tab title="生命科学——临床/制药">
+某临床 NLP 流水线使用 HuggingFace 上特定领域的生物医学 NER 模型做实体抽取，然后切换到 Anthropic Claude 进行结构化的肿瘤报告合成。Claude 调用由同一个 `LiteLLM` 包装器完成——为满足 HIPAA 合规切换到 Azure OpenAI 只需改动一行。
+
+```python
+from semantica.llms import LiteLLM
+from semantica.semantic_extract import NamedEntityRecognizer
+
+# Biomedical NER — HuggingFace extractor for clinical entities
+# (Note: HuggingFace NER uses method="huggingface", not the LLM generation interface)
+ner = NamedEntityRecognizer(
+    methods=["huggingface"],
+    huggingface_model="d4data/biomedical-ner-all",
+    confidence_threshold=0.75,
+)
+
+clinical_note = (
+    "Patient presents with HER2+ breast cancer (T2N1M0, Stage IIB). "
+    "Recommended: trastuzumab 8mg/kg loading then 6mg/kg q3w + pertuzumab 840mg loading "
+    "then 420mg q3w + docetaxel 75mg/m2 q3w (THP regimen) for 6 cycles. "
+    "eGFR 78 mL/min/1.73m2, LVEF 62%. Monitor for cardiotoxicity."
+)
+
+entities = ner.extract_entities(clinical_note)
+# Entity fields: .text, .label (not .type), .confidence
+drugs     = [e for e in entities if e.label == "DRUG"]
+diagnoses = [e for e in entities if e.label in ("DISEASE", "CANCER")]
+
+print("Drugs identified:")
+for d in drugs:
+    print("  {} (conf={:.2f})".format(d.text, d.confidence))
+# trastuzumab (conf=0.98), pertuzumab (conf=0.97), docetaxel (conf=0.96)
+
+# Report synthesis with Claude — switch to azure/gpt-4o for HIPAA by changing one string
+report_llm = LiteLLM(model="anthropic/claude-sonnet-4-20250514")
+# For HIPAA-constrained Azure deployment:
+# report_llm = LiteLLM(model="azure/gpt-4o", api_key="YOUR_AZURE_KEY")
+
+oncology_summary = report_llm.generate(
+    "Write a structured oncology treatment summary for the following note. "
+    "Include: diagnosis, staging, treatment regimen, monitoring parameters, "
+    "and key safety considerations.\n\n" + clinical_note
+)
+print(oncology_summary)
+```
+
+</Tab>
+
+<Tab title="银行——风险/合规">
+某监管问答系统让同一个巴塞尔协议 III（Basel III）问题经过两家提供商，并选取置信度更高的答案——这是高风险监管解读场景下的一种简单共识模式，因为错误的答案会带来法律风险。
+
+```python
+from semantica.llms import OpenAI, LiteLLM
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    retention_days=2555,
+)
+
+# Load Basel III / CRR2 regulatory corpus
+context.store(
+    [
+        {"content": "CRR2 Art. 92: minimum total capital ratio 8% + 2.5% conservation buffer + GSIB surcharge",
+         "metadata": {"source": "CRR2_Art92", "category": "capital_requirement"}},
+        {"content": "Basel III leverage ratio: Tier 1 capital / total exposure >= 3% (Art. 429 CRR2)",
+         "metadata": {"source": "CRR2_Art429", "category": "leverage"}},
+        {"content": "GSIB buffer surcharges: bucket 1=1%, bucket 2=1.5%, bucket 3=2%, bucket 4=2.5%, bucket 5=3.5%",
+         "metadata": {"source": "BCBS_GSIB_2022", "category": "gsib_buffer"}},
+    ],
+    extract_entities=True,
+    extract_relationships=True,
+)
+
+question = (
+    "Under CRR2 Article 92 and the BCBS GSIB framework, what is the minimum "
+    "total capital ratio for a bucket-2 G-SIB? Show the component breakdown."
+)
+
+# Two-provider consensus — same query, same graph, different LLMs
+gpt4o  = OpenAI(model="gpt-4o", api_key="YOUR_OAI_KEY")
+claude = LiteLLM(model="anthropic/claude-sonnet-4-20250514")
+
+answer_a = context.query_with_reasoning(question, llm_provider=gpt4o,  max_results=10)
+answer_b = context.query_with_reasoning(question, llm_provider=claude, max_results=10)
+
+# Pick higher-confidence answer for the audit trail
+best = answer_a if answer_a["confidence"] >= answer_b["confidence"] else answer_b
+winner = "GPT-4o" if best is answer_a else "Claude"
+
+print("Selected: {} (conf={:.0%})".format(winner, best["confidence"]))
+print(best["response"])
+# Expected: 8% (minimum) + 2.5% (conservation) + 1.5% (bucket-2 GSIB) = 12.0% total
+
+# Sources the answer is grounded in
+for src in best["sources"]:
+    print("  - [{}] {}".format(src.get("source", "?"), src["content"][:60]))
+```
+
+</Tab>
+</Tabs>
+
+## 常见陷阱
+
+**为简单抽取任务选用昂贵的前沿模型。** 用 GPT-4o 或 Claude Sonnet 做基础实体抽取是大材小用——Groq 的 Llama 模型只需其几分之一的成本和延迟，就能处理直截了当的 NER 和分类。前沿模型应留给需要细致解读的复杂推理。
+
+**忽视提供商之间的延迟差异。** Groq 通常在 300 毫秒内响应，而 Anthropic Claude 处理同样的查询可能需要 2-3 秒。对实时智能体或交互式工作流而言，多次 LLM 调用会让延迟差异不断累积。请在真实负载下对提供商性能做剖析。
+
+**用 LLM 做正则表达式就能胜任的确定性模式匹配。** 如果你的任务是抽取电子邮件地址、电话号码或其他基于模式的实体，正则表达式比 LLM 抽取更快、更便宜、更可靠。只有当上下文、歧义或领域知识会影响正确解读时，才使用 LLM。
+
+**不校验结构化输出。** `generate_structured()` 方法返回解析后的 JSON，但 LLM 仍可能生成格式错误或不完整的结构。在把数据用于下游之前，务必对照你期望的 Schema 校验返回的字典。
+
+**切换提供商却不测试提示词表现。** 不同模型对同一提示词的响应各不相同。为 GPT-4 优化的提示词在 Llama 或 Claude 上可能效果很差。切换提供商时，请测试你的提示词，并按需调整 temperature、指令或示例。
+
+**在需要最新知识的任务上过度使用本地 HuggingFace 模型。** 本地模型的知识停留在其训练日期，无法访问当前信息。对于需要最新知识的任务（最新的 CVE、现行法规、最新威胁情报），可能必须使用训练数据更新的云端提供商。
+
+## 相关指南
+
+- [智能体记忆](agent-memory)——使用任意 LLM 提供商配合 `query_with_reasoning()` 进行基于图谱的检索
+- [多智能体系统](multi-agent)——在共享图谱的流水线中为不同智能体层级接入不同的 LLM 提供商
+- [语义抽取](semantic-extraction)——LLM 驱动的 NER、关系抽取、事件检测与三元组抽取
+- [GraphRAG](graphrag)——使用 `query_with_reasoning()` 进行多跳图推理

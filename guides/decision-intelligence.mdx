@@ -1,0 +1,645 @@
+---
+title: "决策智能"
+description: "Semantica 如何将 AI 智能体的决策作为一等知识图谱对象进行记录、存储、追踪与查询——支持因果链、先例检索、策略执行与完整的可解释性。"
+icon: "scale-balanced"
+---
+
+`AgentContext.record_decision()` 会将每一个 AI 决策作为节点存入知识图谱（Knowledge Graph），并通过因果边把它与先前的决策、随后的结果关联起来。借助它，你可以构建一条可审计的推理轨迹——即便六个月之后，也能准确还原是哪一次分类引发了哪一次升级，以及记录之前检查了哪条策略。
+
+## 什么是决策智能？
+
+决策智能将智能体自身的决策记录为结构化数据，使其可以被查询、分析和复用。决策不会在执行之后消失，而是成为持久的图节点，带有可检索的元数据、推理链和因果关系。
+
+**决策智能会记录决策**：为智能体做出的每个选择捕获场景、推理、结果、置信度和决策者。这些决策随之成为知识图谱中可查询的节点。
+
+**决策会成为图节点**：可以建立因果关联（决策 A 导致了决策 B）、按相似度检索（找出与当前场景类似的决策），并进行统计分析（置信度趋势、常见结果）。
+
+**目标是可审计性、可解释性、先例检索与因果追溯。** 你可以追溯决策为何做出、检索相似的历史决策以保持一致性，并理解从最初检测到最终行动的完整因果链。
+
+**决策智能与智能体记忆的区别：** 智能体记忆存储外部知识（文档、事实、观察），决策智能存储内部决策（智能体自身做出的分类、审批和行动）。
+
+**决策智能与推理的区别：** 推理通过逻辑规则从现有数据中推导出新事实，决策智能则记录智能体在解决问题过程中做出的选择与判断。
+
+**决策智能与图分析的区别：** 图分析关注知识图谱的结构特性，决策智能则专门聚焦于决策过程及其审计追踪。
+
+## 为什么使用决策智能？
+
+**AI 行为可审计。** 每个决策都会连同推理、置信度和时间戳一起记录，为生产环境中的 AI 行为留下完整的审计追踪。
+
+**可解释性。** 当利益相关者问「系统为什么做了 X」时，你可以追溯导致该行动的确切决策链，包括中间推理步骤。
+
+**复用先例。** 在做出新决策之前，智能体可以检索相似的历史场景及其结果，从而保持一致性并从以往经验中学习。
+
+**因果分析。** 沿着相互关联的决策节点之间的因果关系，理解早期决策如何层层传导为后续结果。
+
+**治理与合规。** 策略引擎可以依据合规规则对决策进行把关，所有策略应用都会被记录下来，以备监管审计。
+
+## 何时使用 / 何时不用
+
+**以下情况适合使用决策智能：**
+- 构建需要做出重大选择的自主智能体
+- 实现需要审计追踪的决策工作流
+- 在合规要求下运营（金融服务、医疗健康、国防）
+- 构建具有多个决策点的审批系统
+- 在决策必须可解释的风险敏感环境中工作
+
+**以下情况不适合使用：**
+- 构建仅检索信息的无状态聊天机器人
+- 实现不做决策的简单检索增强生成（RAG）系统
+- 创建只读的信息检索应用
+- 构建从不做出需要审计追踪的实际行动决策的应用
+
+## API 架构概览
+
+决策智能由三个主要组件协同工作：
+
+**AgentContext** 充当高层的编排层。它提供 `record_decision()`、`find_precedents()` 和因果链方法，同时管理底层的存储与检索系统。
+
+**PolicyEngine** 负责策略评估与合规检查。它将策略规则存为图节点，并在决策被记录之前依据这些规则对其进行校验。
+
+**DecisionRecorder** 专注于记录结构化决策数据、管理审批链，以及在决策需要绕过常规规则时处理策略例外。
+
+<Info>
+  决策追踪同时需要 `VectorStore`（用于基于嵌入（Embedding）的先例检索）和 `ContextGraph`（用于因果图存储）。在 `AgentContext` 上设置 `decision_tracking=True`——省略 `ContextGraph` 会在调用时抛出 `RuntimeError`。`VectorStore` 则是 `AgentContext` 本身必需的：完全省略该参数会因 Python 的参数绑定抛出 `TypeError`，而传入 `vector_store=None` 会在初始化期间抛出 `ValueError`。
+</Info>
+
+## 记录第一个决策
+
+最常用的入口是 `AgentContext.record_decision()`。它会向图中写入一个 `Decision` 节点，为混合相似度检索生成嵌入，并返回一个 UUID，供你以因果关系链接后续决策。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+graph   = ContextGraph(advanced_analytics=True)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    decision_tracking=True,
+)
+
+# The system has just classified a new threat cluster.
+# Record the classification decision before taking any action.
+classification_id = context.record_decision(
+    category       = "threat_classification",
+    scenario       = "Unattributed C2 cluster using HAMMERTOSS-like Twitter dead-drop pattern",
+    reasoning      = "Infrastructure overlaps known APT29 hosting ASN; TTP T1102 matches NOBELIUM playbook with 0.88 cosine similarity",
+    outcome        = "classified_as_apt29_cluster",
+    confidence     = 0.88,
+    decision_maker = "cti_pipeline_v2",
+    entities       = ["apt29", "hammertoss", "twitter_c2"],
+)
+
+print("Decision recorded:", classification_id)
+# → "Decision recorded: dec_a3f2b1c4-..."
+```
+
+`decision_maker` 字段标识产生该决策的组件、工作流、智能体或系统。使用一致的标识符，例如 `"cti_pipeline_v2"`、`"analyst_chen"` 或 `"risk_model_v3"`，即可按决策来源进行过滤和分析。
+
+支撑该节点的 `Decision` 数据类包含以下字段——它们正是被存储和检索的内容：
+
+```python
+from semantica.context import Decision
+from datetime import datetime
+
+# Constructing a Decision explicitly (alternative to record_decision)
+d = Decision(
+    decision_id    = "dec_001",           # UUID — auto-generated if omitted via record_decision
+    category       = "threat_classification",
+    scenario       = "Unattributed C2 cluster",
+    reasoning      = "Infrastructure overlaps APT29 ASN",
+    outcome        = "classified_as_apt29_cluster",
+    confidence     = 0.88,               # float 0.0–1.0
+    timestamp      = datetime.now(),
+    decision_maker = "cti_pipeline_v2",
+    # optional fields:
+    valid_from     = "2025-07-01T00:00:00",   # ISO datetime
+    valid_until    = "2025-09-30T23:59:59",   # ISO datetime
+    metadata       = {"source_feed": "isac_partner_b"},
+)
+graph.add_decision(d)
+```
+
+## 决策前检索先例
+
+在做出重大判断之前，系统应当检索过去的决策、寻找相似场景。这样就能避免同一个集群在两次智能体运行中被分类出不同的结果——第二个智能体会找到第一个智能体的决策，并将其作为先验使用。
+
+```python
+# Search before classifying a new unattributed cluster
+precedents = context.find_precedents(
+    "unattributed C2 cluster Twitter dead-drop infrastructure",
+    limit=5,
+)
+
+for p in precedents:
+    print("[{:.2f} confidence] {} → {}".format(p.confidence, p.category, p.outcome))
+    print("  Reasoning: {}".format(p.reasoning[:80]))
+    print("  Similarity: {:.3f}".format(p.metadata.get("similarity_score", 0)))
+```
+
+混合检索融合两路信号：对 `scenario` 与 `reasoning` 文本的语义相似度（权重 0.7），以及经 Node2Vec 嵌入计算的结构图邻近度（权重 0.3）。返回结果是经过排序的 `Decision` 对象列表——无论措辞差异多大，最相似的历史决策都会浮到最前面。
+
+## 构建因果链
+
+决策很少孤立存在。一次分类决策引发一次升级决策，升级决策又引发一次遏制决策。用因果边将它们链接起来，你就可以沿任一方向遍历这条链——向上游弄清某个结果因何而起，向下游查看某个早期决策触发了什么。
+
+```python
+# The classification above caused an escalation
+escalation_id = context.record_decision(
+    category       = "escalation",
+    scenario       = "APT29 cluster confirmed — active C2 beaconing to NATO contractor subnet",
+    reasoning      = "Classification confidence 0.88 exceeds 0.80 escalation threshold; active C2 requires immediate SOC notification",
+    outcome        = "escalated_to_soc_tier2",
+    confidence     = 0.95,
+    decision_maker = "escalation_engine",
+)
+
+# Link the two decisions: classification caused the escalation
+graph.add_causal_relationship(classification_id, escalation_id, "CAUSED")
+
+# The escalation influenced a patch prioritization decision
+patch_id = context.record_decision(
+    category       = "patch_priority",
+    scenario       = "CVE-2024-3400 present in two NATO contractor VPN appliances",
+    reasoning      = "Active exploitation by classified APT29 cluster elevates CVE-2024-3400 to P0 regardless of base CVSS",
+    outcome        = "prioritized_cve_2024_3400_p0",
+    confidence     = 0.97,
+    decision_maker = "patch_engine",
+)
+
+graph.add_causal_relationship(escalation_id, patch_id, "INFLUENCED")
+```
+
+现在从补丁优先级决策出发，向上追溯它的根本原因：
+
+```python
+upstream = context.get_causal_chain(
+    patch_id,
+    direction = "upstream",
+    max_depth = 5,
+)
+
+print("Causal chain upstream from patch prioritization:")
+for d in upstream:
+    depth = d.metadata.get("causal_distance", "?")
+    print("  [depth {}] {} → {}  (confidence={:.2f})".format(
+        depth, d.category, d.outcome, d.confidence
+    ))
+# [depth 1] escalation → escalated_to_soc_tier2  (confidence=0.95)
+# [depth 2] threat_classification → classified_as_apt29_cluster  (confidence=0.88)
+```
+
+再从最初的分类决策向下游追溯，查看它触发的一切：
+
+```python
+downstream = context.get_causal_chain(
+    classification_id,
+    direction = "downstream",
+    max_depth = 5,
+)
+print("Downstream decisions triggered:", len(downstream))
+for d in downstream:
+    print("  → {} [{}]".format(d.outcome, d.category))
+```
+
+## 生成可解释性报告
+
+`trace_decision_explainability` 一次调用即可呈现全貌：上游原因、下游影响和总连接数。这正是你附加到复盘报告或审计报告中的内容。
+
+```python
+explanation = context.trace_decision_explainability(patch_id)
+
+print("Decision:", patch_id)
+print("Total graph connections :", explanation["total_connections"])
+print("Upstream causes         :", len(explanation.get("upstream_decisions", [])))
+print("Downstream effects      :", len(explanation.get("downstream_decisions", [])))
+```
+
+如果需要带置信度衰减和距离带的更深入因果分析，可以直接在图上使用 `trace_decision_causality`：
+
+```python
+chains = graph.trace_decision_causality(patch_id, max_depth=5)
+
+for chain in chains:
+    print("Chain: {} hops | band={} | decay={:.3f}".format(
+        chain["hop_count"], chain["distance_band"], chain["confidence_decay"]
+    ))
+    print("  Interpretation:", chain["interpretation"])
+    # e.g. "Decision chain spans 2 hops in the 'near' band with 84% confidence
+    #        — causal attribution is reliable."
+```
+
+## 依据策略为决策把关
+
+在记录高风险决策之前，先对照一条带版本的策略进行检查。`PolicyEngine` 将 `Policy` 节点存入图中，并依据策略规则对 `Decision` 对象进行把关。
+
+```python
+from semantica.context import PolicyEngine, Policy, Decision
+from datetime import datetime
+
+engine = PolicyEngine(graph_store=graph)
+
+engine.add_policy(Policy(
+    policy_id   = "cti_confidence_gate",
+    name        = "CTI Minimum Confidence Policy",
+    description = "All threat classifications must have confidence >= 0.80",
+    rules       = {"min_confidence": 0.80, "requires_reasoning": True},
+    category    = "threat_classification",
+    version     = "1.0",
+    created_at  = datetime.now(),
+    updated_at  = datetime.now(),
+))
+
+d = Decision(
+    decision_id    = "dec_low_conf",
+    category       = "threat_classification",
+    scenario       = "Possible APT29 activity — weak signals only",
+    reasoning      = "Single IP overlap, no TTP match",
+    outcome        = "classified_as_apt29_tentative",
+    confidence     = 0.62,   # below the 0.80 threshold
+    timestamp      = datetime.now(),
+    decision_maker = "cti_pipeline_v2",
+)
+
+if engine.check_compliance(d, "cti_confidence_gate"):
+    graph.add_decision(d)
+    engine.record_policy_application(d.decision_id, "cti_confidence_gate", "1.0")
+    print("Decision recorded — policy compliant.")
+else:
+    print("Decision blocked — confidence 0.62 below policy minimum 0.80.")
+    # → "Decision blocked — confidence 0.62 below policy minimum 0.80."
+```
+
+当紧急情况需要绕过策略闸门时，请记录这次例外，并附上审批人身份和理由：
+
+```python
+from semantica.context import DecisionRecorder
+
+recorder = DecisionRecorder(graph_store=graph)
+
+exception_id = recorder.record_exception(
+    decision_id     = "dec_low_conf",
+    policy_id       = "cti_confidence_gate",
+    reason          = "Active exploitation in progress — cannot wait for higher-confidence attribution",
+    approver        = "ciso_director",
+    approval_method = "slack_dm",
+    justification   = "Time-critical incident response; manual CISO sign-off obtained at 03:14 UTC",
+)
+print("Policy exception recorded:", exception_id)
+```
+
+对于多级审批工作流，请将 `DecisionRecorder.record_approval_chain()` 与图数据库后端（例如 Neo4j/FalkorDB）配合使用。本指南中使用的内存型 `ContextGraph` 示例不支持通过 `execute_query()` 持久化审批链。
+
+
+
+## 生成决策审计报告
+
+轮班结束或事件处理完毕时，`get_decision_insights` 会为图中的每个决策生成统计摘要——非常适合写入交接班记录和合规报告。
+
+```python
+insights = graph.get_decision_insights()
+
+print("Total decisions today :", insights["total_decisions"])
+print("Confidence — mean={:.2f}  min={:.2f}  max={:.2f}".format(
+    insights["confidence_stats"]["mean"],
+    insights["confidence_stats"]["min"],
+    insights["confidence_stats"]["max"],
+))
+print("\nDecisions by category:")
+for cat, count in sorted(insights["categories"].items(), key=lambda x: -x[1]):
+    print("  {:35s} {}".format(cat, count))
+print("\nOutcomes:")
+for outcome, count in sorted(insights["outcomes"].items(), key=lambda x: -x[1]):
+    print("  {:35s} {}".format(outcome, count))
+```
+
+示例输出：
+
+```text
+Total decisions today : 47
+Confidence — mean=0.87  min=0.62  max=0.99
+
+Decisions by category:
+  threat_classification                 18
+  patch_priority                        12
+  escalation                             9
+  containment                            8
+
+Outcomes:
+  classified_as_apt29_cluster           11
+  prioritized_p0_patch                  12
+  escalated_to_soc_tier2                 9
+  isolated_host                          8
+```
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防 — CTI/威胁情报">
+
+CTI 流水线对威胁集群进行分类，记录每次分类的置信度和推理，以因果关系将分类决策与升级决策链接起来，并为威胁情报负责人生成每日审计报告。
+
+```python
+from semantica.context import AgentContext, ContextGraph, PolicyEngine, Policy
+from semantica.vector_store import VectorStore
+from datetime import datetime
+
+graph   = ContextGraph(advanced_analytics=True)
+engine  = PolicyEngine(graph_store=graph)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    decision_tracking=True,
+)
+
+engine.add_policy(Policy(
+    policy_id   = "cti_gate",
+    name        = "CTI Attribution Confidence Gate",
+    description = "Attributions require confidence >= 0.80",
+    rules       = {"min_confidence": 0.80},
+    category    = "threat_classification",
+    version     = "1.0",
+    created_at  = datetime.now(),
+    updated_at  = datetime.now(),
+))
+
+# Check precedents before classifying
+precedents = context.find_precedents(
+    "Twitter dead-drop C2 pattern overlapping APT29 infrastructure",
+    limit=3,
+)
+for p in precedents:
+    print("Prior: {} → {} ({:.0%})".format(p.scenario[:40], p.outcome, p.confidence))
+
+# Record the classification
+class_id = context.record_decision(
+    category       = "threat_classification",
+    scenario       = "New C2 cluster: Twitter dead-drop, AS200651 hosting, TTP T1102",
+    reasoning      = "IP block overlaps APT29 cluster; T1102 matches HAMMERTOSS playbook",
+    outcome        = "classified_apt29_march_cluster",
+    confidence     = 0.88,
+    decision_maker = "cti_pipeline_v2",
+    entities       = ["apt29", "hammertoss"],
+)
+
+# Link to downstream escalation
+esc_id = context.record_decision(
+    category       = "escalation",
+    scenario       = "APT29 cluster active — beaconing to NATO subnet 10.30.0.0/16",
+    reasoning      = "Active C2 with high-confidence attribution requires immediate SOC notification",
+    outcome        = "escalated_tier2_soc",
+    confidence     = 0.97,
+    decision_maker = "escalation_engine",
+)
+graph.add_causal_relationship(class_id, esc_id, "CAUSED")
+
+# Post-shift audit report
+insights = graph.get_decision_insights()
+print("Decisions recorded:", insights["total_decisions"])
+print("Mean confidence   :", round(insights["confidence_stats"]["mean"], 2))
+```
+
+</Tab>
+
+<Tab title="安全 — SOC/事件响应">
+
+事件处置期间，SOC 会记录遏制决策，并以因果链接将它们与触发这些决策的检测决策关联起来。六小时后，复盘即可重放从首次告警到最终遏制的确切决策序列。
+
+```python
+from semantica.context import AgentContext, ContextGraph, DecisionRecorder
+from semantica.vector_store import VectorStore
+
+graph    = ContextGraph()
+recorder = DecisionRecorder(graph_store=graph)
+context  = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    decision_tracking=True,
+)
+
+# T+0: Detection decision
+detect_id = context.record_decision(
+    category       = "detection",
+    scenario       = "WKSTN-047: wmiprvse.exe spawned scheduled task — T1053.005",
+    reasoning      = "Scheduled task creation by WMI provider host is high-fidelity lateral movement indicator",
+    outcome        = "flagged_wkstn047_suspicious",
+    confidence     = 0.93,
+    decision_maker = "edr_engine",
+)
+
+# T+8min: Containment decision caused by detection
+contain_id = context.record_decision(
+    category       = "containment",
+    scenario       = "WKSTN-047 confirmed compromised — lateral movement to DC01 via SMB",
+    reasoning      = "PsExec artefact on DC01; isolate before domain-wide credential compromise",
+    outcome        = "isolated_wkstn047",
+    confidence     = 0.95,
+    decision_maker = "analyst_chen",
+)
+graph.add_causal_relationship(detect_id, contain_id, "CAUSED")
+
+# Post-mortem: trace the full chain
+chain = context.get_causal_chain(contain_id, direction="upstream", max_depth=5)
+print("Post-mortem — causal chain for isolation decision:")
+for d in chain:
+    print("  [depth {}] {} → {}  (confidence={:.2f}, maker={})".format(
+        d.metadata.get("causal_distance", "?"),
+        d.category, d.outcome, d.confidence, d.decision_maker,
+    ))
+
+# Full explainability for the containment decision
+explanation = context.trace_decision_explainability(contain_id)
+print("Upstream causes   :", len(explanation.get("upstream_decisions", [])))
+print("Total connections :", explanation["total_connections"])
+```
+
+</Tab>
+
+<Tab title="生命科学 — 临床/制药">
+
+临床 AI 助手记录治疗调整决策及其指南先例，以因果链接将其与先前的诊断决策关联起来，并生成结构化的决策记录，供 MDT 评审和监管审计使用。
+
+```python
+from semantica.context import AgentContext, ContextGraph, PolicyEngine, Policy
+from semantica.context import Decision, DecisionRecorder
+from semantica.vector_store import VectorStore
+from datetime import datetime
+
+graph   = ContextGraph()
+engine  = PolicyEngine(graph_store=graph)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    decision_tracking=True,
+)
+
+engine.add_policy(Policy(
+    policy_id   = "clinical_confidence_gate",
+    name        = "Clinical Decision Confidence Gate",
+    description = "Treatment decisions require confidence >= 0.90",
+    rules       = {"min_confidence": 0.90},
+    category    = "treatment_modification",
+    version     = "1.0",
+    created_at  = datetime.now(),
+    updated_at  = datetime.now(),
+))
+
+# Diagnostic decision precedes treatment decision
+diag_id = context.record_decision(
+    category       = "diagnosis_assessment",
+    scenario       = "Patient eGFR 28 mL/min/1.73m2, CKD Stage 4, current metformin 1000mg BD",
+    reasoning      = "eGFR 28 confirms CKD Stage 4; below 30 threshold for metformin contraindication",
+    outcome        = "confirmed_ckd_stage4_metformin_contraindicated",
+    confidence     = 0.99,
+    decision_maker = "clinical_ai_v3",
+)
+
+# Treatment modification caused by diagnostic assessment
+treat_id = context.record_decision(
+    category       = "treatment_modification",
+    scenario       = "Metformin discontinuation required — eGFR 28 below contraindication threshold",
+    reasoning      = "NICE NG28 and BNF both contraindicate metformin at eGFR < 30; switch to gliclazide MR 30mg OD",
+    outcome        = "discontinue_metformin_initiate_gliclazide",
+    confidence     = 0.97,
+    decision_maker = "clinical_ai_v3",
+)
+graph.add_causal_relationship(diag_id, treat_id, "CAUSED")
+
+# MDT audit report
+chain = context.get_causal_chain(treat_id, direction="upstream", max_depth=3)
+print("MDT Decision Audit — Treatment Modification")
+print("=" * 50)
+for d in chain:
+    print("Caused by: [{}] {} (confidence={:.0%})".format(
+        d.category, d.outcome, d.confidence
+    ))
+
+insights = graph.get_decision_insights()
+cs = insights["confidence_stats"]
+print("\nSession decisions: {}  |  mean confidence: {:.2f}".format(
+    insights["total_decisions"], cs["mean"]
+))
+```
+
+</Tab>
+
+<Tab title="银行 — 风险/合规">
+
+信贷决策系统依据带版本的贷款政策记录每一笔贷款决策，以因果链接将边缘审批与压力测试决策关联起来，并导出完整的决策审计追踪，供 SR 11-7 模型治理审查使用。
+
+```python
+from semantica.context import AgentContext, ContextGraph, PolicyEngine, Policy
+from semantica.context import Decision, DecisionRecorder
+from semantica.vector_store import VectorStore
+from datetime import datetime
+
+graph   = ContextGraph()
+engine  = PolicyEngine(graph_store=graph)
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=graph,
+    decision_tracking=True,
+)
+
+engine.add_policy(Policy(
+    policy_id   = "lending_policy_v3",
+    name        = "Lending Compliance Policy v3",
+    description = "Credit decisions require confidence >= 0.85 and documented reasoning",
+    rules       = {"min_confidence": 0.85, "requires_reasoning": True},
+    category    = "loan_approval",
+    version     = "3.0",
+    created_at  = datetime.now(),
+    updated_at  = datetime.now(),
+))
+
+# Check precedents before approving
+precedents = context.find_precedents(
+    "first-time buyer mortgage borderline DSTI stressed rate scenario",
+    limit=3,
+)
+for p in precedents:
+    print("Prior: {} → {} ({:.0%})".format(p.scenario[:40], p.outcome, p.confidence))
+
+# Stress-test decision precedes approval decision
+stress_id = context.record_decision(
+    category       = "stress_test",
+    scenario       = "APP-2025-994421: LTV 78%, DSTI 38% at current rate; DSTI rises to 44% at +300bps",
+    reasoning      = "DSTI 44% under stress exceeds 35% guideline threshold — requires LMI and income verification",
+    outcome        = "stress_test_conditional_pass",
+    confidence     = 0.88,
+    decision_maker = "risk_model_v3",
+)
+
+# Approval decision influenced by stress test
+d = Decision(
+    decision_id    = "loan_dec_994421",
+    category       = "loan_approval",
+    scenario       = "APP-2025-994421: first-time buyer, LTV 78%, credit score 714, 30yr fixed",
+    reasoning      = "Credit score 714 exceeds 700 minimum; LTV within 80% cap; conditional on LMI given stress-test DSTI",
+    outcome        = "approved_conditional_lmi_required",
+    confidence     = 0.89,
+    timestamp      = datetime.now(),
+    decision_maker = "credit_model_v3",
+)
+
+if engine.check_compliance(d, "lending_policy_v3"):
+    loan_id = context.record_decision(
+        category=d.category, scenario=d.scenario,
+        reasoning=d.reasoning, outcome=d.outcome, confidence=d.confidence,
+        decision_maker=d.decision_maker,
+    )
+    graph.add_causal_relationship(stress_id, loan_id, "INFLUENCED")
+    engine.record_policy_application(d.decision_id, "lending_policy_v3", "3.0")
+    print("Loan decision recorded — policy compliant.")
+
+    # SR 11-7 explainability report
+    explanation = context.trace_decision_explainability(loan_id)
+    print("Upstream influences:", len(explanation.get("upstream_decisions", [])))
+    print("Total connections  :", explanation["total_connections"])
+```
+
+</Tab>
+
+</Tabs>
+
+## 跨重启持久化决策
+
+使用本地 `ContextGraph` 时，请在每次会话结束时保存，并在下一次会话开始时加载。所有决策节点、因果边和 FAISS 嵌入都会被恢复。
+
+```python
+# End of session
+context.save("agent_state/")
+# Writes: agent_state/knowledge_graph.json + FAISS index
+
+# Start of next session
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=ContextGraph(),
+    decision_tracking=True,
+)
+context.load("agent_state/")
+
+# All past decisions are searchable immediately
+results = context.find_precedents("APT29 infrastructure attribution", limit=5)
+```
+
+## 常见陷阱
+
+**记录决策却不建立因果关联。** 孤立的决策节点提供的洞见不如相互连接的决策链。请使用 `add_causal_relationship()` 链接相关决策，启用因果追溯。
+
+**创建孤立的决策节点。** 决策只有连接到图中的实体、其他决策或结果时才会产生价值。请使用 `entities` 参数将决策链接到相关实体。
+
+**记录过多低价值决策。** 并非每个细小选择都需要永久记录。请聚焦于那些影响结果、需要审计追踪或能从先例检索中受益的重要决策。
+
+**把先例相似度当作证据。** 高相似度得分表明场景相关，而非情形完全相同。请把先例当作参考，同时考量每个新决策的具体上下文。
+
+**在简单检索就够用时使用决策智能。** 如果你的系统只是检索信息而不做出实际行动选择，传统搜索或智能体记忆可能比决策追踪更合适。
+
+## 相关指南
+
+- [上下文图谱](context-graphs) — `ContextGraph` 如何存储决策节点和因果边
+- [距离智能](distance-intelligence) — `trace_decision_causality()` 为因果链标注置信度衰减和距离带
+- [溯源](provenance) — W3C PROV-O 审计追踪，将决策记录封装进符合标准的溯源信息
+- [MCP Server](mcp-server) — 通过 `record_decision` 和 `find_precedents` 工具向大语言模型（LLM）智能体开放决策记录与先例检索
+- [变更管理](change-management) — 使用 `flush_checkpoint()` 为决策状态创建检查点，生成带版本的快照

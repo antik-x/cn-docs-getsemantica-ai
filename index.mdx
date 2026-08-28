@@ -1,20 +1,413 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Semantica"
+description: "面向 AI 的问责与上下文层：上下文图谱 · 决策智能 · 全链路溯源"
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+```bash
+pip install semantica
+```
+
+你的 AI 智能体刚刚做出了一个决策。现在，需要有人能把它解释清楚。
+
+*它当时知道什么？哪些事实影响了结果？这些事实从何而来？它以前是否做过同样的判断——结果如何？*
+
+如果你的技术栈无法以可追溯的记录回答这些问题，你就存在一个缺口。不是能力缺口，而是**问责缺口**。这正是 AI 至今未能在医疗、金融、法律和政府领域规模化落地的原因，也是面向这些市场构建产品的团队不断从零重建同样护栏的原因。
+
+**Semantica 弥合的正是这个缺口。**它是位于你现有智能体框架之下的上下文与问责层：不是用来取代 LangChain 或 LlamaIndex，而是让它们的输出变得可信的基础设施。
+
+
+## 每个生产环境 AI 团队都会遇到的问题
+
+强大的智能体并不天然可信。五个结构性盲区让现代 AI 系统无法在受监管的环境中部署：
+
+**没有记忆结构**——智能体存储的是嵌入（Embedding），而非语义
+- 无法追问一条事实*为什么*会被召回
+- 被召回的事实与其源文档之间没有关联
+- 上下文是一个黑盒，每次运行都会重置
+
+**没有决策轨迹**——智能体持续行动，却不记录任何东西
+- 没有可供提交给监管者或审计师的历史
+- 无法回放或复现过去的决策
+- 调试意味着重新运行，而非回顾检查
+
+**没有溯源（Provenance）**——输出无法追溯到源事实
+- 在医疗、金融和法律领域：这是硬性的合规阻碍
+- 从推理回溯到原始文档没有数据血缘
+- 无法证明智能体实际依赖了什么
+
+**没有推理透明度**——只有黑盒答案，没有解释
+- 无法校验推理路径
+- 无法质疑某个具体结论
+- 没有改进或纠正未来行为的依据
+
+**没有冲突检测**——相互矛盾的事实悄悄共存在向量存储中
+- 两个来源不一致时无从察觉
+- 输出随时间推移变得不一致且不可预测
+- 随着知识库增长，静默失败不断累积
+
+<Note>
+  这些并非边缘案例。它们正是企业 AI 试点停滞不前的原因，也是你的合规团队一直说*还没到时候*的原因。
+</Note>
+
+
+## Semantica 为你的技术栈带来什么
+
+Semantica 为每个智能体提供实现问责所需的基础设施。几分钟即可接入你现有的环境：
+
+**上下文图谱（Context Graph）**——一张结构化、可查询的图谱，记录你的智能体知道什么、决策了什么、推理了什么
+- 跨智能体运行持久存在：会话之间不丢失上下文
+- 可用 SPARQL 和完整的图算法查询
+- 节点和边带有 `valid_from` / `valid_until` 的时序模型
+- 完整知识状态的时间点快照
+
+**决策智能**——每个决策都是你系统中的一等对象
+- `record_decision()` 捕获完整生命周期与因果链
+- 对过往决策进行混合先例检索，保证一致性
+- `analyze_decision_impact()` 展示下游后果
+- 从触发到结果的因果链可视化
+
+**全链路溯源**——每条事实都链接到其源文档和摄取事件
+- 跨所有模块的 W3C PROV-O 兼容血缘
+- 从原始输入到最终推理的完整可追溯性
+- 带 `recorded_at` 时间戳并支持 OWL-Time 导出
+- 满足 HIPAA、SOX、GDPR、FDA 21 CFR Part 11 的审计要求
+
+**推理引擎**——可解释的推理路径，而非黑盒
+- 前向链、Rete、演绎、溯因
+- 基于 SPARQL 查询的 RDF 图推理
+- 支持递归 Horn 子句规则的 Datalog
+- 每个结论都有可追溯的推导路径支撑
+
+**时序智能**——你的图谱不仅知道*什么*，还知道*何时*
+- Allen 区间代数：涵盖全部 13 种时序关系
+- 对历史图谱状态的时间点查询
+- 每条事实都带时序溯源标记
+- 支持 OWL-Time 导出，符合标准的归档
+
+**Ontology Hub**——在浏览器中完成本体的完整生命周期
+- 用于 Schema 设计与编辑的可视化编辑器
+- SHACL Studio 用于编写约束和校验
+- 跨多个本体的对齐编写
+- 内置健康仪表盘与版本控制
 
 <Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
+  可与任何大语言模型（LLM）提供商和任何智能体框架协同工作：无需改动架构，即可加入现有技术栈。
 </Tip>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+<img src="/assets/img/diagrams/architecture-overview.svg" alt="Semantica 四层架构：摄取 → 处理 → 智能 → 应用" style={{ width: '100%', borderRadius: '12px', margin: '24px 0' }} />
+
+
+## 看它如何工作
+
+一条 pip install 命令。几行代码接入你的智能体。其余一切皆可追溯。
+
+```bash
+pip install semantica
+```
+
+<CodeGroup>
+
+```python OpenAI
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.llms import OpenAI
+
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=1536),
+    knowledge_graph=ContextGraph(advanced_analytics=True),
+    decision_tracking=True,
+    llm=OpenAI(model="gpt-4o"),
+)
+
+context.store("GPT-4 outperforms GPT-3.5 on reasoning benchmarks by 40%")
+
+decision_id = context.record_decision(
+    category="model_selection",
+    scenario="Choose LLM for production reasoning pipeline",
+    reasoning="GPT-4 benchmark advantage justifies 3x cost increase",
+    outcome="selected_gpt4",
+    confidence=0.91,
+)
+
+precedents = context.find_precedents("model selection reasoning", limit=5)
+influence  = context.analyze_decision_influence(decision_id)
+```
+
+```python Anthropic
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.llms import LiteLLM
+import os
+
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=1024),
+    knowledge_graph=ContextGraph(advanced_analytics=True),
+    decision_tracking=True,
+    llm=LiteLLM(model="anthropic/claude-opus-4-7", api_key=os.getenv("ANTHROPIC_API_KEY")),
+)
+
+context.store("Claude excels at long-context reasoning and code generation")
+
+decision_id = context.record_decision(
+    category="model_selection",
+    scenario="Choose LLM for document analysis pipeline",
+    reasoning="Claude's 200k context window eliminates chunking overhead",
+    outcome="selected_claude",
+    confidence=0.94,
+)
+
+precedents = context.find_precedents("document analysis model", limit=5)
+```
+
+```python Ollama (Local)
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.llms import LiteLLM
+
+context = AgentContext(
+    vector_store=VectorStore(backend="faiss", dimension=768),
+    knowledge_graph=ContextGraph(advanced_analytics=True),
+    decision_tracking=True,
+    llm=LiteLLM(model="ollama/llama3.2", base_url="http://localhost:11434"),
+)
+
+# Fully local: no data leaves your infrastructure
+context.store("Local LLMs enable air-gapped compliance deployments")
+
+decision_id = context.record_decision(
+    category="deployment_model",
+    scenario="Choose inference strategy for on-prem environment",
+    reasoning="Air-gap requirement eliminates cloud API options",
+    outcome="local_inference",
+    confidence=0.99,
+)
+```
+
+</CodeGroup>
+
+- [完整快速上手](quickstart)——手把手走通整条流水线
+- [Cookbook](cookbook)——40 多个真实场景的 Jupyter notebook
+- [加入 Discord](https://discord.gg/sV34vps5hH)——社区交流与支持
+
+
+## 为错误代价高昂的领域而生
+
+Semantica 专为这样的领域而设计：每个决策都必须可解释，每条事实都必须可追溯。
+
+<Warning>
+  **这是系统级的可解释性，而非基础模型的可解释性。**Semantica 不会暴露、重构或解释大语言模型（LLM）/基础模型*内部*发生了什么——其内部推理或思维链对外保持不透明，对任何外部系统而言都是如此。Semantica 解释的是模型*之外*的东西：输入的上下文与数据、产生的决策、其溯源、相关关系、所应用的策略，以及完整的执行轨迹。完整范围说明见[核心概念](concepts)。
+</Warning>
+
+**医疗与生命科学**
+- 带完整审计追踪的临床决策支持
+- 药物相互作用与禁忌图谱
+- 患者安全事件追踪与根因分析
+- 开箱即用的 HIPAA 合规溯源链
+
+**金融与风险**
+- 用于欺诈检测的知识图谱
+- 经得起审计的风险评估轨迹
+- SOX、GDPR 与 MiFID II 合规基础设施
+- 用于监管报告的模型决策血缘
+
+**法律与合规**
+- 有证据支撑的研究，每条被引用的事实都带溯源链接
+- 条款抽取可追溯的合同分析
+- 跨司法辖区的法规变更追踪
+- 完整推理路径，随时可用于法庭可采信的文档
+
+**网络安全**
+- 关联威胁行为者、TTP 与指标的威胁归因图谱
+- 带完整事件溯源的事件响应时间线
+- 覆盖完整杀伤链的安全审计追踪
+- 与 MITRE ATT&CK 对齐的知识图谱集成
+
+**政府与国防**
+- 从简报到结果的政策决策轨迹
+- 带溯源链的涉密信息处理
+- 情报报告的监管链审查
+- 支持本地 LLM 的物理隔离部署
+
+**关键基础设施**
+- 借助时序智能的电网状态追踪
+- 交通安全事件图谱
+- 带决策审计追踪的应急响应协调
+- 面向高风险运营决策的后果建模
+
+
+## 从这里开始
+
+<Steps>
+  <Step title="安装 Semantica">
+    ```bash
+    pip install semantica
+    ```
+    可选的额外依赖（`[all]`、`[neo4j]`、`[pinecone]`）与环境配置见[安装](installation)。
+  </Step>
+  <Step title="运行快速上手">
+    在 [5 分钟](quickstart)内构建一条完整的知识图谱流水线：
+    - 从任意来源摄取文档
+    - 抽取实体和关系
+    - 构建并查询图谱
+    - 记录并追踪一个决策
+  </Step>
+  <Step title="学习心智模型">
+    [核心概念](concepts)涵盖：
+    - 知识图谱与向量存储：各自适用于什么场景
+    - GraphRAG（Graph-Augmented Retrieval，图增强检索）是什么，以及 Semantica 如何实现它
+    - 溯源与决策追踪如何协同工作
+    - 问责层架构
+  </Step>
+  <Step title="深入学习任意模块">
+    每个模块都有专门的[参考页](reference/context)，内容包括：
+    - 完整的类与方法文档
+    - 带类型和默认值的参数表
+    - 每个功能可运行的代码示例
+  </Step>
+</Steps>
+
+- [安装](installation)——不到一分钟装好 Semantica
+- [快速上手](quickstart)——5 分钟构建一条完整的知识图谱流水线
+- [核心概念](concepts)——API 背后的心智模型
+- [API 参考](reference/context)——模块、类和方法的准确细节
+- [Cookbook](cookbook)——面向真实使用场景的领域 notebook
+- [更新日志](https://github.com/semantica-agi/semantica/releases)——发布历史
+
+
+## 完整能力
+
+<AccordionGroup>
+
+<Accordion title="上下文与决策智能" icon="brain">
+
+### 上下文图谱
+
+- 实体、关系和决策的结构化持久图谱
+- 每个节点和边都带 `valid_from` / `valid_until` 的时序模型
+- 跨历史图谱状态的时间点查询
+- 距离智能：语义邻域与 N×N 距离矩阵
+
+### 决策追踪
+
+- `record_decision()` 提供完整生命周期管理与因果链
+- 对过往决策进行混合相似度检索，确保一致性
+- `analyze_decision_impact()` 与 `analyze_decision_influence()` 用于后果建模
+- Ego 模式探索，支持有针对性的邻域调查
+
+</Accordion>
+
+<Accordion title="知识工程" icon="diagram-project">
+
+### 实体与关系抽取
+
+- 命名实体识别（NER）：模式、机器学习或 LLM 方法
+- 通过 LLM 或基于规则的流水线进行带类型的三元组抽取
+- 带时序与因果关联的事件抽取
+
+### 本体与 Schema
+
+- Ontology Hub：可视化编辑器、SHACL Studio、对齐、健康仪表盘
+- 去重 v2：`blocking_v2`、`hybrid_v2`、`semantic_v2`：速度最高提升 7 倍
+- Datalog 推理：带不动点语义的递归 Horn 子句规则
+- SPARQL 推理：基于查询的 RDF 图推理
+
+</Accordion>
+
+<Accordion title="溯源与可审计性" icon="shield-check">
+
+### 血缘追踪
+
+- 跨所有模块的 W3C PROV-O 血缘：每条事实都有来源
+- `recorded_at` 时间戳与完整的 OWL-Time 导出
+- 带 SHA-256 校验和与版本控制的变更管理
+- 从摄取事件到最终推理的完整审计追踪
+
+### 合规基础设施
+
+- HIPAA：以可审计的溯源链处理患者数据
+- SOX / MiFID II：具备完整可追溯性的金融决策记录
+- GDPR：支撑主体访问权与删除权工作流的数据血缘
+- FDA 21 CFR Part 11：电子记录与签名的合规
+
+</Accordion>
+
+<Accordion title="数据摄取与导出" icon="database">
+
+### 摄取格式
+
+- 文档：PDF、DOCX、HTML、PPTX、Docling 版面分析
+- 结构化数据：JSON、CSV、Excel、Parquet、XML
+- 来源：网页爬取、SQL、Snowflake、订阅源、电子邮件、代码仓库、模型上下文协议（MCP）
+
+### 向量存储
+
+- FAISS、Pinecone、Weaviate、Qdrant、Milvus、PgVector、内存存储
+
+### 图存储
+
+- Neo4j、FalkorDB、Apache AGE、Amazon Neptune
+
+### 导出格式
+
+- RDF：Turtle、JSON-LD、N-Triples、RDF/XML
+- 表格：Parquet、CSV、Arrow
+- 图：GraphML、GEXF、DOT、ArangoDB AQL
+- 本体：OWL、SKOS、SHACL
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 模块参考
+
+| 模块 | 提供的能力 |
+| :-------- | :----------------- |
+| `semantica.context` | 上下文图谱、智能体记忆、决策追踪、因果分析、先例检索 |
+| `semantica.kg` | 知识图谱构建、图算法、时序模型、Allen 区间代数 |
+| `semantica.semantic_extract` | NER、关系抽取、事件抽取、三元组生成 |
+| `semantica.reasoning` | 前向链、Rete、演绎、溯因、SPARQL、Datalog |
+| `semantica.ontology` | SHACL、SKOS、对齐、diff/迁移、自动生成、OWL/RDF |
+| `semantica.explorer` | FastAPI Knowledge Explorer（知识探索器）、Ontology Hub、距离智能、SHACL Studio |
+| `semantica.mcp_server` | MCP stdio 服务器：为 Claude Desktop、VS Code、Cursor、Windsurf、Cline 提供 12 个工具 |
+| `semantica.vector_store` | FAISS、Pinecone、Weaviate、Qdrant、Milvus、PgVector |
+| `semantica.graph_store` | Neo4j、FalkorDB、Apache AGE、Amazon Neptune |
+| `semantica.triplet_store` | 带 SPARQL 的内存与持久化 RDF 三元组存储 |
+| `semantica.ingest` | 文件、网页、订阅源、数据库、Snowflake、Parquet、XML、MCP |
+| `semantica.parse` | 文档解析：PDF、DOCX、HTML、PPTX、Docling 版面分析 |
+| `semantica.split` | 文本分块：句子、段落、token、语义边界等策略 |
+| `semantica.normalize` | 文本规范化、实体规范化、空白与编码清理 |
+| `semantica.embeddings` | Sentence-Transformers、FastEmbed、OpenAI、BGE、Ollama 本地嵌入 |
+| `semantica.pipeline` | 流水线 DSL、并行 worker、重试策略、失败处理 |
+| `semantica.export` | RDF、Parquet、ArangoDB AQL、CSV、OWL、Arrow、GraphML、GEXF、DOT |
+| `semantica.visualization` | 程序化图谱渲染：力导向、层级、环形、弹簧布局 |
+| `semantica.deduplication` | 实体去重 v1/v2、相似度评分、blocking、合并 |
+| `semantica.conflicts` | 跨重叠知识来源的冲突检测与解决 |
+| `semantica.provenance` | W3C PROV-O 血缘追踪、来源归因、审计追踪 |
+| `semantica.change_management` | 带 SHA-256 校验和的版本控制、diff、回滚 |
+| `semantica.llms` | Groq、OpenAI、Anthropic、Gemini、Ollama、DeepSeek、Novita AI、LiteLLM、HuggingFace |
+| `semantica.seed` | 基于 CSV、JSON、SQL、API 和 RDF 来源构建种子图谱 |
+| `semantica.evals` | 评估框架：KG 质量、抽取 F1、流水线基准测试、回归追踪 |
+| `semantica.core` | 编排、ConfigManager、LifecycleManager、PluginRegistry、MethodRegistry |
+| `semantica.utils` | 日志、校验、进度追踪、哈希工具、嵌套 dict 辅助函数 |
+
+
+## 为什么选择 Semantica
+
+**开源，MIT 协议**——无供应商锁定，无付费墙功能。
+- 完整源码托管在 GitHub
+- 每一行代码你的安全团队都可审计
+- 自由 fork、扩展和自托管，不受任何限制
+- 无遥测，无使用情况上报
+
+**生产环境就绪**——为经不起意外的团队而构建。
+- 1,000 多个通过的测试，完整的回归覆盖
+- `PipelineValidator` 在启动时捕获配置错误
+- `FailureHandler` 支持指数退避和死信队列
+- v0.5.0 修复了 12 个安全漏洞
+
+**模块化设计**——只导入你需要的部分。
+- 无需图存储即可使用 `NERExtractor`
+- 无需向量存储即可使用 `ContextGraph`
+- 每个组件都可独立替换、独立测试
+- 无框架锁定：可与任何智能体技术栈配合使用

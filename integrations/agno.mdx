@@ -1,0 +1,227 @@
+---
+title: "Agno 集成"
+description: "通过五个专注的组件，把 Semantica 的语义智能栈接入 Agno 多智能体团队。"
+icon: "robot"
+---
+
+> 五个即插即用的组件，将 Semantica 的 KG、向量记忆与决策智能带入任何 Agno 智能体或团队。
+
+
+## 安装
+
+```bash
+# Core integration
+pip install "semantica[agno]"
+
+# With a graph store backend
+pip install "semantica[agno,graph-neo4j]"
+pip install "semantica[agno,graph-falkordb]"
+
+# Full stack
+pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
+```
+
+
+## 组件一览
+
+- **AgnoContextStore** — `AgentMemory(db=…)`: 用「向量 + 上下文图谱」混合记忆取代 Agno 的扁平存储，为任何智能体加入决策追踪与先例检索。
+- **AgnoKnowledgeGraph** — `Agent(knowledge=…)`: 文档流经完整的 Semantica 抽取流水线，进入一个可查询的 `ContextGraph`，支持多跳 GraphRAG（Graph-Augmented Retrieval，图增强检索）。
+- **AgnoDecisionKit** — `Agent(tools=[…])`: 6 个决策智能工具：记录决策、查找先例、追踪因果链、分析影响、检查策略、汇总历史。
+- **AgnoKGToolkit** — `Agent(tools=[…])`: 7 个 KG 构建工具：抽取实体、抽取关系、加入图谱、查询图谱、查找相关项、推断事实、导出子图。
+- **AgnoSharedContext** — 团队级：所有智能体共享同一个 `ContextGraph`。每个智能体通过 `bind_agent()` 获得按角色划定范围的视图。写入会按角色打标签。
+
+
+## 组件详情
+
+<Tabs>
+  <Tab title="AgnoContextStore">
+    用一个**向量 + 上下文图谱**混合记忆存储，取代 Agno 的扁平对话存储。实现了 `agno.memory.db.base.MemoryDb`。
+
+    ```python
+    from agno.agent import Agent
+    from agno.memory import AgentMemory
+    from agno.models.openai import OpenAIChat
+    from semantica.context import ContextGraph
+    from semantica.vector_store import VectorStore
+    from integrations.agno import AgnoContextStore
+
+    store = AgnoContextStore(
+        vector_store=VectorStore(backend="faiss"),
+        knowledge_graph=ContextGraph(advanced_analytics=True),
+        decision_tracking=True,
+        graph_expansion=True,
+        session_id="user_session_42",
+    )
+
+    agent = Agent(
+        model=OpenAIChat(id="gpt-4o"),
+        memory=AgentMemory(db=store),
+        description="A financially aware assistant with persistent decision intelligence.",
+    )
+    ```
+
+    | 方法 | 说明 |
+    | :-------- | :------------- |
+    | `upsert_memory()` | 把文本存入 `AgentContext`（向量索引 + 图节点） |
+    | `read_memories()` | 混合检索：向量相似度 + 图跳数扩展 |
+    | `record_decision()` | 记录带推理与结果的结构化决策 |
+    | `find_precedents()` | 返回语义相似的历史决策 |
+  </Tab>
+  <Tab title="AgnoKnowledgeGraph">
+    为 Agno 智能体提供可查询的 `ContextGraph`，而非扁平的文档存储。被摄取的文档会流经完整的 Semantica 抽取流水线。
+
+    ```python
+    from agno.agent import Agent
+    from agno.models.openai import OpenAIChat
+    from semantica.kg import GraphBuilder
+    from semantica.semantic_extract import NERExtractor, RelationExtractor
+    from integrations.agno import AgnoKnowledgeGraph
+
+    kg = AgnoKnowledgeGraph(
+        graph_builder=GraphBuilder(),
+        ner_extractor=NERExtractor(),
+        relation_extractor=RelationExtractor(),
+    )
+
+    kg.load("regulatory_docs/", recursive=True)
+    kg.load(texts=["Basel IV capital requirements apply from January 2026."])
+
+    agent = Agent(model=OpenAIChat(id="gpt-4o"), knowledge=kg, search_knowledge=True)
+    ```
+
+    **摄取：**`parse → NER → relation extract → graph build → vector index`
+
+    **检索：**`vector retrieval → entity lookup → graph hop expansion → context injection`
+
+    ```python
+    ctx = kg.get_graph_context("Basel IV")
+    # Returns a text summary of the entity's immediate neighbourhood
+    ```
+  </Tab>
+  <Tab title="AgnoDecisionKit">
+    把 Semantica 的决策智能暴露为原生的 Agno 工具。
+
+    ```python
+    from agno.agent import Agent
+    from agno.models.openai import OpenAIChat
+    from semantica.context import AgentContext
+    from integrations.agno import AgnoDecisionKit
+
+    ctx   = AgentContext(decision_tracking=True)
+    agent = Agent(
+        model=OpenAIChat(id="gpt-4o"),
+        tools=[AgnoDecisionKit(context=ctx)],
+        show_tool_calls=True,
+    )
+    agent.print_response("Should we approve this mortgage application?")
+    ```
+
+    | 工具 | 说明 |
+    | :------ | :------------- |
+    | `record_decision` | 记录决策及其推理、结果与置信度 |
+    | `find_precedents` | 检索相似的过往决策 |
+    | `trace_causal_chain` | 追踪某个决策的因果链 |
+    | `analyze_impact` | 评估某个决策的下游影响 |
+    | `check_policy` | 依据策略规则校验决策 |
+    | `get_decision_summary` | 按类别汇总决策历史 |
+  </Tab>
+  <Tab title="AgnoKGToolkit">
+    让智能体在推理过程中主动构建并查询上下文图谱。
+
+    ```python
+    from agno.agent import Agent
+    from agno.models.openai import OpenAIChat
+    from integrations.agno import AgnoKGToolkit
+
+    agent = Agent(
+        model=OpenAIChat(id="gpt-4o"),
+        tools=[AgnoKGToolkit()],
+        show_tool_calls=True,
+    )
+    ```
+
+    | 工具 | 说明 |
+    | :------ | :------------- |
+    | `extract_entities` | 从文本中抽取命名实体 |
+    | `extract_relations` | 抽取实体之间的关系 |
+    | `add_to_graph` | 把实体/关系加入上下文图谱 |
+    | `query_graph` | 查询图谱（自然语言或 Cypher） |
+    | `find_related` | 查找与给定实体相关的概念 |
+    | `infer_facts` | 应用规则，从图谱中推断新事实 |
+    | `export_subgraph` | 把子图导出为 RDF / JSON-LD |
+  </Tab>
+  <Tab title="AgnoSharedContext">
+    在 Agno `Team` 内共享的单个 `ContextGraph`。每个智能体通过 `bind_agent()` 获得按角色划定范围的视图。写入会按角色打标签。
+
+    ```python
+    from agno.agent import Agent
+    from agno.team import Team
+    from agno.models.openai import OpenAIChat
+    from semantica.context import ContextGraph
+    from semantica.vector_store import VectorStore
+    from integrations.agno import AgnoSharedContext, AgnoDecisionKit, AgnoKGToolkit
+
+    shared = AgnoSharedContext(
+        vector_store=VectorStore(backend="faiss"),
+        knowledge_graph=ContextGraph(advanced_analytics=True),
+        decision_tracking=True,
+    )
+
+    research_agent = Agent(
+        name="Researcher",
+        model=OpenAIChat(id="gpt-4o"),
+        memory=shared.bind_agent("researcher"),
+        tools=[AgnoKGToolkit(context=shared)],
+    )
+    decision_agent = Agent(
+        name="Analyst",
+        model=OpenAIChat(id="gpt-4o"),
+        memory=shared.bind_agent("analyst"),
+        tools=[AgnoDecisionKit(context=shared)],
+    )
+
+    team = Team(
+        name="Research & Decision Team",
+        agents=[research_agent, decision_agent],
+        mode="coordinate",
+    )
+    ```
+
+    ```python
+    decision_id = shared.record_decision(
+        category="strategy",
+        scenario="Expand to EU market",
+        reasoning="Strong demand signals from Q1 survey",
+        outcome="approved",
+        confidence=0.87,
+        agent_role="cfo",
+    )
+    precedents = shared.find_precedents("market expansion")
+    insights   = shared.get_shared_insights()
+    ```
+  </Tab>
+</Tabs>
+
+
+## API 参考
+
+```python
+from integrations.agno import (
+    AgnoContextStore,    # MemoryDb implementation
+    AgnoKnowledgeGraph,  # AgentKnowledge implementation
+    AgnoDecisionKit,     # Decision intelligence Toolkit
+    AgnoKGToolkit,       # Knowledge graph Toolkit
+    AgnoSharedContext,   # Team-level shared context
+    AGNO_AVAILABLE,      # bool: True if agno is installed
+)
+```
+
+即使没有安装 `agno`，这五个类也都可以使用：它们携带完整的 Semantica API，并会优雅降级。
+
+
+## 另请参阅
+
+- [Context 模块](../reference/context)——支撑本集成的 AgentContext 与 ContextGraph。
+- [知识图谱](../reference/kg)——AgnoKnowledgeGraph 所用的 KG 构建。
+- [LLMs](../reference/llms)——为 Agno 智能体配置大语言模型（LLM）提供商。
+- [Vector Store](../reference/vector_store)——AgnoContextStore 的向量后端。

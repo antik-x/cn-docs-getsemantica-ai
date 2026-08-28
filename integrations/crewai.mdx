@@ -1,0 +1,147 @@
+---
+title: "CrewAI 集成"
+description: "通过三个即插即用的组件，为 CrewAI 的 crew 提供共享语义知识图谱、决策智能与基于图谱的检索。"
+icon: "users"
+---
+
+> 三个即插即用的组件，将 Semantica 的知识图谱（Knowledge Graph）与决策智能带入任何 CrewAI crew。
+
+## 安装
+
+```bash
+pip install "semantica[crewai]"
+```
+
+要求 `crewai >= 0.80.0`。如果未安装 `crewai`，本集成仍可导入——每个类都携带完整的 Semantica API 并会优雅降级，但无法传给 `Crew`。
+
+## 组件一览
+
+- **SemanticaKGTool** — `Agent(tools=[…])`: 5 个 KG 构建/查询动作：抽取实体、抽取关系、加入图谱、查询图谱、查找相关项。
+- **SemanticaDecisionTool** — `Agent(tools=[…])`: 5 个决策智能动作：记录决策、查找先例、追踪因果链、分析影响、检查策略。
+- **SemanticaKnowledgeSource** — `Crew(knowledge_sources=[…])`: 把 `ContextGraph` 序列化进 CrewAI 的知识存储，让每个智能体都能检索这张图谱。
+
+## 组件详情
+
+<Tabs>
+  <Tab title="SemanticaKGTool">
+    让智能体在推理过程中主动**构建并查询**共享的 `ContextGraph`。
+
+    ```python
+    from crewai import Agent, Crew, Task
+    from semantica.context import ContextGraph
+    from integrations.crewai import SemanticaKGTool
+
+    graph = ContextGraph()
+
+    analyst = Agent(
+        role="Knowledge Analyst",
+        goal="Build and explore a knowledge graph from documents",
+        backstory="You map entities and relationships into a shared graph.",
+        tools=[SemanticaKGTool(graph=graph)],
+    )
+
+    crew = Crew(
+        agents=[analyst],
+        tasks=[Task(
+            description="Extract and link key entities from the brief",
+            expected_output="JSON",
+            agent=analyst,
+        )],
+    )
+    crew.kickoff()
+    ```
+
+    | 工具 | 说明 |
+    | :------ | :------------- |
+    | `extract_entities` | 从 `text` 中抽取命名实体 |
+    | `extract_relations` | 抽取 `text` 中实体之间的关系 |
+    | `add_to_graph` | 从 `text` 抽取实体/关系并加入共享图谱 |
+    | `query_graph` | 使用 `query` 按节点 id、类型与内容对图谱做关键词检索 |
+    | `find_related` | 在 `hops` 跳范围内查找与 `entity` 相关的概念 |
+
+    所有动作都返回 JSON，智能体拿到的是可解析的结果。
+
+    **共享图谱：**该工具读写的正是你传入的 `graph`。若未给出 `graph`，则会新建一个内存中的 `ContextGraph()`（并记录一条警告）——两个各自自动创建图谱的工具实例**不会**共享知识。请把同一个 `ContextGraph` 传给每个需要共享状态的智能体。
+  </Tab>
+  <Tab title="SemanticaDecisionTool">
+    把 Semantica 的决策智能暴露为原生 CrewAI 工具，底层由 `AgentContext` 支撑。
+
+    ```python
+    from crewai import Agent, Crew, Task
+    from integrations.crewai import SemanticaDecisionTool
+
+    planner = Agent(
+        role="Decision Planner",
+        goal="Make grounded, precedented decisions",
+        backstory="You record decisions and validate them against policy.",
+        tools=[SemanticaDecisionTool()],
+    )
+
+    crew = Crew(agents=[planner], tasks=[...])
+    ```
+
+    未传入 `AgentContext` 时，会在内存中新建一个，带有 `decision_tracking=True` 以及它自己的 `ContextGraph`，因此决策动作开箱即用（会记录一条警告——请把同一个 `AgentContext` 传给每个需要共享决策状态的智能体）。`record_decision` 中缺失的可选字段会回退到 `category="general"`、`reasoning="agent decision"` 与 `outcome="recorded"`。`find_precedents` 最多返回 `max_precedents` 条结果。如果知识图谱无法追踪因果，`trace_causal_chain` 会返回明确的错误，而不是拿基于相似度的结果顶替。
+
+    | 工具 | 说明 |
+    | :------ | :------------- |
+    | `record_decision` | 记录决策及其推理、结果与置信度 |
+    | `find_precedents` | 检索相似的过往决策 |
+    | `trace_causal_chain` | 从某个决策出发追踪因果链 |
+    | `analyze_impact` | 评估某个决策的下游影响 |
+    | `check_policy` | 依据策略规则校验拟议决策 |
+  </Tab>
+  <Tab title="SemanticaKnowledgeSource">
+    让 **crew 中的每个智能体**都能检索访问某个 `ContextGraph`。
+
+    ```python
+    from crewai import Agent, Crew, Task
+    from semantica.context import ContextGraph
+    from integrations.crewai import SemanticaKnowledgeSource
+
+    graph = ContextGraph()
+    graph.add_node(node_id="privacy", node_type="policy", content="...")
+
+    researcher = Agent(
+        role="Policy Researcher",
+        goal="Answer questions from the knowledge base",
+        backstory="You retrieve from graph knowledge to answer accurately.",
+    )
+
+    crew = Crew(
+        agents=[researcher],
+        tasks=[...],
+        knowledge_sources=[SemanticaKnowledgeSource(graph=graph)],
+    )
+    ```
+
+    kickoff 时，图谱的节点和边会被序列化、分块，并经由 CrewAI 的知识流水线存储。
+
+    > **需要配置 embedder：**文本块的存储要经过 CrewAI 的知识流水线，而该流水线需要配置一个 embedder。请设置 `Crew(embedder=...)`（或提供 CrewAI 回退使用的默认凭证，例如 `OPENAI_API_KEY`）。如果没有配置可用的 embedder，存储会失败并记录 ERROR，智能体将检索不到**任何**内容——crew 仍会运行，但其知识查询返回为空。
+
+    **兼容性：**CrewAI 的 `BaseKnowledgeSource` 契约在 `0.80.x` 与当前版本之间发生了变化（`load_content()` → `validate_content()`/`aadd()`）。`SemanticaKnowledgeSource` 同时实现了旧版与现行方法，因此适用于 `crewai>=0.80.0`。
+  </Tab>
+</Tabs>
+
+## 检查点与序列化
+
+CrewAI 会把工具与知识源序列化为 JSON，用于检查点/恢复。Semantica 的活体状态（`ContextGraph`、`AgentContext`、抽取器）**不在该序列化范围内**——恢复出来的工具/知识源会带着一个全新的内存 `ContextGraph` 回来，并记录一条警告。在你重新接上活的图谱/上下文之前，这些恢复出来的对象会针对**空**图谱回答查询，因此在恢复之后、智能体继续之前，请重新接线（例如 `restored_tool.graph = live_graph`）。
+
+## API 参考
+
+```python
+from integrations.crewai import (
+    SemanticaKGTool,          # BaseTool: KG construction/query actions
+    SemanticaDecisionTool,    # BaseTool: decision intelligence actions
+    SemanticaKnowledgeSource, # BaseKnowledgeSource: graph → crew knowledge
+    CREWAI_AVAILABLE,         # bool: True if crewai is installed
+)
+```
+
+即使没有安装 `crewai`，这三个类也都可以使用：它们携带完整的 Semantica API，并会优雅降级。
+
+## 另请参阅
+
+- [Context 模块](../reference/context)——支撑本集成的 AgentContext 与 ContextGraph。
+- [语义抽取](../reference/semantic_extract)——SemanticaKGTool 所用的 NERExtractor / RelationExtractor。
+- [LLMs](../reference/llms)——为 crew 中的智能体配置大语言模型（LLM）提供商。
+- [Vector Store](../reference/vector_store)——SemanticaDecisionTool 所用的向量后端。

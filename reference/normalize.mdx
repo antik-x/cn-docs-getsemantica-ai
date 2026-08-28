@@ -1,0 +1,584 @@
+---
+title: "Normalize 模块"
+description: "文本清洗、实体规范化、日期规范化、数字转换、语言检测与编码修复：在抽取开始之前完成。"
+icon: "broom"
+---
+
+**`semantica.normalize`** 会在**抽取与图构建之前**对原始数据做规范化处理：
+
+- 文本清洗：Unicode NFC/NFKC、空白折叠、智能引号与破折号规范化
+- 实体规范化：通过可配置的别名映射完成别名解析与消歧
+- 日期规范化：任意格式 → ISO 8601，包括相对日期
+- 数字转换：`"$1.2B"` → `1200000000.0`，支持单位与货币处理
+- 针对不一致的源数据提供语言检测与编码修复
+
+所有规范化器都同时提供便捷函数（一行式调用）与有状态的类实例（完全控制）。
+
+
+## 为什么要在抽取之前先规范化
+
+非结构化数据天然不一致。如果不做规范化，同一个现实世界实体在你的图谱里会以几十种变体出现：
+
+- `"Apple Inc."`、`"Apple Computer Inc."`、`"APPLE INC."`：多个节点，一家公司
+- `"Jan 1st, 2020"`、`"01/01/2020"`、`"2020-01-01"`：三种格式，一个日期
+- `"$1.2B"`、`"1,200,000,000"`、`"1.2 billion USD"`：三个字符串，一个数字
+- `"Hello World"` 与 `"Hello World"`：一个不换行空格破坏了字符串匹配
+
+在任何抽取器、去重器或图构建器接触数据之前，规范化就已把这些变体折叠归一。
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `TextNormalizer` | Unicode 形式（NFC/NFKC）、空白折叠、智能引号与破折号规范化 |
+| `EntityNormalizer` | 借助可配置的别名映射完成别名解析与实体消歧 |
+| `DateNormalizer` | 将任意日期字符串格式解析为 ISO 8601；支持相对日期 |
+| `NumberNormalizer` | `"$1.2B"` → `1200000000.0`；单位转换；货币解析 |
+| `DataCleaner` | 检测并移除重复项、处理缺失值、校验记录 |
+| `LanguageDetector` | `detect(text)` → 语言代码 `str`；`detect_with_confidence(text)` → `(code, score)` 元组 |
+| `EncodingHandler` | `detect(bytes)` → `(encoding, confidence)` 元组；`convert_to_utf8(bytes)` → `str` |
+
+## 快速开始
+
+```python
+from semantica.normalize import (
+    TextNormalizer,
+    DateNormalizer,
+    NumberNormalizer,
+    LanguageDetector,
+    EncodingHandler,
+)
+
+# Text: normalize unicode, collapse whitespace, replace smart quotes
+normalizer = TextNormalizer()
+clean = normalizer.normalize_text("  Hello,  World…  ")
+# → "Hello, World..."
+
+# Date
+date_norm = DateNormalizer()
+date = date_norm.normalize_date("Jan 1st, 2020")
+# → "2020-01-01T00:00:00+00:00"
+
+# Number
+num_norm = NumberNormalizer()
+num = num_norm.normalize_number("$1.2B")
+# → 1200000000.0
+
+# Language: returns a language code string
+detector = LanguageDetector()
+lang = detector.detect("Bonjour le monde")
+# → "fr"
+
+# Encoding: returns (encoding_name, confidence) tuple
+handler = EncodingHandler()
+encoding, confidence = handler.detect(raw_bytes)
+utf8_text = handler.convert_to_utf8(raw_bytes)
+```
+
+## 推荐的处理顺序
+
+<Steps>
+  <Step title="EncodingHandler：先修复编码">
+    损坏的字节会破坏下游的一切。务必在其他任何操作之前先运行这一步。
+
+    ```python
+    from semantica.normalize import EncodingHandler
+
+    handler = EncodingHandler()
+    # detect returns (encoding_name, confidence_score)
+    encoding, confidence = handler.detect(raw_bytes)
+    # convert_to_utf8 returns a str
+    utf8_text = handler.convert_to_utf8(raw_bytes)
+    ```
+
+    <Warning>
+      **在任何操作之前先做编码修复。**UTF-8 流中出现的一个 cp1252 字符会悄悄破坏周围的文本。请先调用 `handler.convert_to_utf8(raw_bytes)`，再让其他任何规范化器接触数据。
+    </Warning>
+  </Step>
+  <Step title="TextNormalizer：Unicode、空白与特殊字符">
+    ```python
+    from semantica.normalize import TextNormalizer
+
+    normalizer = TextNormalizer()
+    # normalize_text takes per-call options, not constructor params
+    clean_text = normalizer.normalize_text(
+        utf8_text,
+        unicode_form="NFC",
+        case="preserve",
+    )
+    ```
+
+    <Warning>
+      **不要在 NER 之前转小写。**在实体抽取之前调用 `normalize_text(text, case="lower")` 会破坏 NER 依赖的大小写信号。如有需要，只在抽取之后再应用大小写规范化。
+    </Warning>
+  </Step>
+  <Step title="EntityNormalizer：规范化实体名称">
+    ```python
+    from semantica.normalize import EntityNormalizer
+
+    # Provide aliases in config so the resolver can map variants
+    normalizer = EntityNormalizer(alias_map={
+        "apple computer inc.": "Apple Inc.",
+        "apple computer, inc.": "Apple Inc.",
+    })
+    canonical = normalizer.normalize_entity(
+        "Apple Computer, Inc.", entity_type="Organization"
+    )
+    # → "Apple Inc." (if the alias_map contains it, else title-cased input)
+    ```
+
+    <Warning>
+      **`EntityNormalizer` 没有内置的公司后缀展开。**不存在 `"Apple Computer Inc."` → `"Apple Inc."` 的自动映射。要规范化公司名称，请提供带小写键的显式 `alias_map`：`EntityNormalizer(alias_map={"apple computer inc.": "Apple Inc."})`。
+    </Warning>
+  </Step>
+  <Step title="DateNormalizer 与 NumberNormalizer：解析结构化值">
+    ```python
+    from semantica.normalize import DateNormalizer, NumberNormalizer
+
+    date_norm = DateNormalizer()
+    num_norm  = NumberNormalizer()
+
+    # format and timezone are passed to normalize_date(), not to the constructor
+    date = date_norm.normalize_date("Jan 1st, 2020", format="ISO8601", timezone="UTC")
+    # → "2020-01-01T00:00:00+00:00"
+
+    num = num_norm.normalize_number("$1.2B")
+    # → 1200000000.0
+    ```
+  </Step>
+  <Step title="LanguageDetector：在干净文本上检测语言">
+    ```python
+    from semantica.normalize import LanguageDetector
+
+    detector = LanguageDetector()
+
+    # detect() returns a language code string
+    lang = detector.detect("Bonjour le monde")
+    # → "fr"
+
+    # detect_with_confidence() returns (code, score) tuple
+    lang, confidence = detector.detect_with_confidence("Bonjour le monde")
+    # → ("fr", 0.98)
+    ```
+  </Step>
+</Steps>
+
+## 便捷函数
+
+最快的路径：一次导入，一次调用：
+
+```python
+from semantica.normalize import (
+    normalize_text, normalize_entity, normalize_date,
+    normalize_number, clean_data, detect_language, handle_encoding,
+)
+
+clean  = normalize_text("  Hello,   World  ")
+# → "Hello, World"
+
+entity = normalize_entity("John Doe", entity_type="Person")
+# → "John Doe" (title-cased; alias resolution requires alias_map)
+
+date   = normalize_date("Jan 1st, 2020")
+# → "2020-01-01T00:00:00+00:00"
+
+num    = normalize_number("$1.2B")
+# → 1200000000.0
+
+# detect_language returns a language code string by default
+lang   = detect_language("Bonjour le monde")
+# → "fr"
+
+# handle_encoding with operation="detect" returns (encoding, confidence) tuple
+encoding, confidence = handle_encoding(raw_bytes, operation="detect")
+
+# handle_encoding with operation="convert" returns a UTF-8 string
+utf8_text = handle_encoding(raw_bytes, operation="convert")
+```
+
+## 规范化器
+
+<Tabs>
+  <Tab title="TextNormalizer">
+    `TextNormalizer` 的构造函数接受 `config=None, **kwargs`。规范化选项在每次调用 `normalize_text()` 时传入：
+
+    ```python
+    from semantica.normalize import TextNormalizer
+
+    normalizer = TextNormalizer()
+
+    # normalize_text options
+    normalized = normalizer.normalize_text(
+        raw_text,
+        unicode_form="NFC",       # "NFC" | "NFD" | "NFKC" | "NFKD"
+        case="preserve",          # "preserve" | "lower" | "upper" | "title"
+        normalize_diacritics=False,
+        line_break_type="unix",   # "unix" | "windows"
+    )
+
+    # HTML stripping and text cleaning: separate clean_text() method
+    cleaned = normalizer.clean_text(html_text, remove_html=True)
+
+    # Batch normalization
+    results = normalizer.process_batch(
+        ["  hello  ", "WORLD", "café"],
+        unicode_form="NFKC",
+        case="lower",
+    )
+
+    # normalize() accepts str or List[Dict] (parsed docs from DocumentParser)
+    docs = [{"content": "Hello world"}, {"content": "test text"}]
+    normalized_docs = normalizer.normalize(docs)
+    ```
+
+    | `normalize_text()` 参数 | 类型 | 默认值 | 说明 |
+    | :----------------------------- | :---- | :------- | :----------- |
+    | `unicode_form` | `str` | `"NFC"` | Unicode 形式：`"NFC"` / `"NFD"` / `"NFKC"` / `"NFKD"` |
+    | `case` | `str` | `"preserve"` | `"preserve"` / `"lower"` / `"upper"` / `"title"` |
+    | `normalize_diacritics` | `bool` | `False` | 去除变音符号 |
+    | `line_break_type` | `str` | `"unix"` | `"unix"`（`\n`）或 `"windows"`（`\r\n`） |
+
+    **Unicode 形式指南：**
+
+    | 形式 | 适用场景 |
+    | :---- | :-------- |
+    | `NFC` | 默认：最适合存储与显示 |
+    | `NFKC` | 搜索索引：规范化连字、全角字符与分数 |
+    | `NFD` | 去除变音符号：先把 é 拆成 e + 组合变音符号，再去掉变音符号 |
+    | `NFKD` | 与 NFD 相同，但还会分解兼容字符 |
+
+    **用于细粒度控制的子规范化器：**
+
+    ```python
+    from semantica.normalize import (
+        UnicodeNormalizer, WhitespaceNormalizer, SpecialCharacterProcessor
+    )
+
+    unicode_norm = UnicodeNormalizer()
+    text = unicode_norm.normalize_unicode("café", form="NFC")
+
+    ws_norm = WhitespaceNormalizer()
+    text    = ws_norm.normalize_whitespace("Hello\t\t World\n\n")
+    # → "Hello  World\n\n"
+
+    processor = SpecialCharacterProcessor()
+    text      = processor.normalize_punctuation("‘Hello’")
+    # → "'Hello'"
+    ```
+  </Tab>
+  <Tab title="EntityNormalizer">
+    `EntityNormalizer` 负责空白清理、可选的别名解析（需要显式的 `alias_map`），以及名称格式规范化。
+
+    ```python
+    from semantica.normalize import EntityNormalizer
+
+    # With alias map: resolves exact matches (lowercase key lookup)
+    normalizer = EntityNormalizer(alias_map={
+        "apple computer inc.": "Apple Inc.",
+        "ms": "Microsoft",
+        "ml":  "Machine Learning",
+    })
+
+    normalizer.normalize_entity("Apple Computer Inc.", entity_type="Organization")
+    # → "Apple Inc."
+
+    # Without alias map: only whitespace/format cleanup
+    normalizer2 = EntityNormalizer()
+    normalizer2.normalize_entity("apple inc", entity_type="Organization")
+    # → "apple inc"  (no built-in suffix expansion)
+
+    # Person: title-cased
+    normalizer2.normalize_entity("john doe", entity_type="Person")
+    # → "John Doe"
+    ```
+
+    **关键行为：**
+    - 别名映射使用**小写键查找**：请以小写形式注册别名
+    - `entity_type="Person"` 会对名称启用 `title()` 大小写处理
+    - 没有内置的公司后缀规范化（Inc → Incorporated 等）
+     ：如有需要，请手动将这些映射添加到 `alias_map`
+
+    **子规范化器：**
+
+    ```python
+    from semantica.normalize import AliasResolver, EntityDisambiguator, NameVariantHandler
+
+    # alias_map keys must be lowercase
+    resolver = AliasResolver(alias_map={
+        "ml":  "Machine Learning",
+        "nlp": "Natural Language Processing",
+    })
+    resolved = resolver.resolve_aliases("ml")
+    # → "Machine Learning" or None if not in map
+
+    disambiguator = EntityDisambiguator()
+    result = disambiguator.disambiguate(
+        "Apple",
+        entity_type="Organization",
+        context="Steve Jobs founded Apple in Cupertino in 1976",
+    )
+    # → {"entity_name": "Apple", "entity_type": "Organization", "confidence": 0.8, "candidates": ["Apple"]}
+
+    handler   = NameVariantHandler()
+    canonical = handler.normalize_name_format("Dr. JOHN P. SMITH Jr.")
+    # → "John P. Smith Jr." (removes leading title)
+    ```
+
+    <Tip>
+      **`AliasResolver` 使用小写键查找。**即使规范形式是首字母大写，也要用小写键注册别名。解析器在查找之前会先把输入转换为小写。
+    </Tip>
+  </Tab>
+  <Tab title="DateNormalizer">
+    `DateNormalizer` 接受 `config=None, **kwargs`。`format` 与 `timezone` 选项传给 `normalize_date()`，而不是构造函数：
+
+    ```python
+    from semantica.normalize import DateNormalizer
+
+    normalizer = DateNormalizer()
+
+    dates = [
+        "January 1st, 2020",
+        "01/01/2020",
+        "2020-01-01T00:00:00Z",
+        "yesterday",
+        "3 weeks ago",
+    ]
+
+    for d in dates:
+        print(normalizer.normalize_date(d, format="ISO8601", timezone="UTC"))
+    ```
+
+    依赖 `python-dateutil`：`pip install python-dateutil`。若未安装，则回退到 `datetime.fromisoformat()`。
+
+    **子规范化器：**
+
+    ```python
+    from semantica.normalize import TimeZoneNormalizer, RelativeDateProcessor, TemporalExpressionParser
+    from datetime import datetime
+
+    # TimeZoneNormalizer takes a datetime object, not a string
+    tz_norm = TimeZoneNormalizer()
+    dt_naive = datetime(2024, 1, 1, 9, 0)
+    utc_dt = tz_norm.convert_to_utc(dt_naive)
+    tz_dt  = tz_norm.normalize_timezone(dt_naive, target_timezone="America/New_York")
+
+    # RelativeDateProcessor: reference_date is passed to process_relative_expression(),
+    # not to the constructor
+    processor = RelativeDateProcessor()
+    ref = datetime(2025, 1, 15)
+    result = processor.process_relative_expression("3 days ago", reference_date=ref)
+    # → datetime(2025, 1, 12)
+
+    parser = TemporalExpressionParser()
+    result = parser.parse_temporal_expression("from January 2020 to March 2021")
+    # → {"date": ..., "time": ..., "range": {"start": ..., "end": ...}, "relative": False}
+    ```
+  </Tab>
+  <Tab title="NumberNormalizer">
+    把带单位、货币和缩写的数字字符串转换为 `int` 或 `float`：
+
+    ```python
+    from semantica.normalize import NumberNormalizer
+
+    normalizer = NumberNormalizer()
+
+    normalizer.normalize_number("$1,234.56")  # → 1234.56
+    normalizer.normalize_number("42K")         # → 42000.0
+    normalizer.normalize_number("$1.2B")       # → 1200000000.0
+    normalizer.normalize_number("3.14e-2")     # → 0.0314
+    normalizer.normalize_number("42%")         # → 0.42
+    ```
+
+    **单位与货币转换：**
+
+    ```python
+    from semantica.normalize import UnitConverter, CurrencyNormalizer
+
+    converter = UnitConverter()
+    result    = converter.convert_units(100, from_unit="kg", to_unit="pound")
+    # → 220.46...
+
+    normalized_unit = converter.normalize_unit("km")
+    # → "kilometer"
+
+    currency_norm = CurrencyNormalizer()
+    result = currency_norm.normalize_currency("$42.50")
+    # → {"amount": 42.50, "currency": "USD", "original": "$42.50"}
+    ```
+  </Tab>
+  <Tab title="语言与编码">
+    ### LanguageDetector
+
+    识别文本字符串的语言。依赖 `langdetect`：`pip install langdetect`。
+
+    ```python
+    from semantica.normalize import LanguageDetector
+
+    detector = LanguageDetector()
+
+    # detect() returns a language code string
+    lang = detector.detect("Bonjour le monde")
+    # → "fr"
+
+    # detect_with_confidence() returns (code, confidence) tuple
+    lang, confidence = detector.detect_with_confidence("Bonjour le monde")
+    # → ("fr", 0.98)
+
+    # detect_multiple() returns List[(code, confidence)]
+    results = detector.detect_multiple("This might be mixed", top_n=3)
+    # → [("en", 0.85), ...]
+
+    # Batch: returns List[str]
+    codes = detector.detect_batch(["Hello", "Hola", "Bonjour", "Ciao"])
+
+    # Check specific language
+    is_english = detector.is_language(text, "en", min_confidence=0.8)
+    ```
+
+    <Note>
+      `detect()` 至少需要 10 个字符才能可靠检测。对更短的文本，它会返回 `default_language`（默认：`"en"`）。
+    </Note>
+
+    <Warning>
+      **`LanguageDetector.detect()` 返回的是 `str`，而不是 dict。**要拿 `(language_code, confidence)` 元组，请用 `detect_with_confidence()`；要拿 `List[(code, confidence)]`，请用 `detect_multiple()`。
+    </Warning>
+
+    ### EncodingHandler
+
+    检测并修复字符编码问题。依赖 `chardet`：`pip install chardet`。
+
+    ```python
+    from semantica.normalize import EncodingHandler
+
+    handler = EncodingHandler()
+
+    # detect() returns (encoding_name, confidence_score) tuple
+    encoding, confidence = handler.detect(raw_bytes)
+    # → ("windows-1252", 0.73)
+
+    # convert_to_utf8() returns a str
+    utf8_text = handler.convert_to_utf8(raw_bytes)
+    utf8_text = handler.convert_to_utf8(raw_bytes, source_encoding="cp1252")
+
+    # remove_bom() returns same type as input (str or bytes) with BOM stripped
+    clean = handler.remove_bom(text_with_bom)
+
+    # Detect and convert a file on disk
+    utf8_content = handler.convert_file_to_utf8("input.txt", output_path="output.txt")
+    ```
+
+    **关键行为：**
+    - `detect()` 内部使用 `chardet`：输入越长，准确度越高
+    - 未提供 `source_encoding` 时，`convert_to_utf8()` 会自动检测编码，随后依次回退尝试 `latin-1`、`cp1252`、`iso-8859-1`
+    - 务必最先运行 `EncodingHandler`：损坏的字节会让每个下游规范化器接连失败
+
+    <Warning>
+      **`EncodingHandler.detect()` 返回的是 `(str, float)` 元组，而不是 dict。**用 `encoding, confidence = handler.detect(data)` 解包。
+    </Warning>
+  </Tab>
+</Tabs>
+
+## DataCleaner
+
+清洗结构化记录集：在加载进向量存储或图谱之前很有用：
+
+```python
+from semantica.normalize import DataCleaner, DataValidator, DuplicateDetector
+
+cleaner = DataCleaner()
+
+# clean_data: remove_duplicates, validate, and handle_missing in one pass
+cleaned = cleaner.clean_data(
+    records,
+    remove_duplicates=True,
+    validate=True,
+    handle_missing=True,
+    missing_strategy="remove",  # "remove" | "fill" | "impute"
+)
+
+# detect_duplicates: returns List[DuplicateGroup]
+groups = cleaner.detect_duplicates(records, threshold=0.9)
+for group in groups:
+    print(f"Duplicate group: {len(group.records)} records, similarity={group.similarity_score:.2f}")
+    print(f"  Canonical: {group.canonical_record}")
+
+# handle_missing_values: standalone missing-value handling
+processed = cleaner.handle_missing_values(records, strategy="fill", fill_value="")
+
+# validate_data: validate against a schema dict
+result = cleaner.validate_data(
+    records,
+    schema={"fields": {
+        "name":   {"type": str,  "required": True},
+        "age":    {"type": int,  "required": False},
+        "active": {"type": bool, "required": False},
+    }},
+)
+# ValidationResult has .valid (bool), .errors (list), .warnings (list)
+print(f"Valid:    {result.valid}")
+print(f"Errors:   {len(result.errors)}")
+print(f"Warnings: {len(result.warnings)}")
+```
+
+### DataCleaner 方法
+
+| 方法 | 返回值 | 说明 |
+| :------ | :------- | :----------- |
+| `clean_data(dataset, remove_duplicates, validate, handle_missing, **options)` | `List[Dict]` | 组合清洗流水线 |
+| `detect_duplicates(dataset, threshold, key_fields)` | `List[DuplicateGroup]` | 返回相似度高于阈值的重复组 |
+| `validate_data(dataset, schema)` | `ValidationResult` | 按 schema 字典校验记录 |
+| `handle_missing_values(dataset, strategy)` | `List[Dict]` | 移除、填充或插补缺失值 |
+
+<Tip>
+  **`DataCleaner.remove_duplicates()` 并不是一个独立的方法。**请用 `detect_duplicates()` 获取 `DuplicateGroup` 对象，或调用 `clean_data(records, remove_duplicates=True)` 原地移除重复项。
+</Tip>
+
+<Tip>
+  **`DataCleaner` 处理的是扁平记录，而不是图实体。**要做实体级语义去重，请改用 Deduplication 模块中的 `DuplicateDetector`。
+</Tip>
+
+## 流水线集成
+
+```python
+from semantica.pipeline import PipelineBuilder, ExecutionEngine
+from semantica.ingest import FileIngestor
+from semantica.normalize import TextNormalizer
+from semantica.semantic_extract import NERExtractor
+
+ingestor   = FileIngestor()
+normalizer = TextNormalizer()
+extractor  = NERExtractor(method="ml")
+
+builder = PipelineBuilder()
+# TextNormalizer.normalize() accepts both str and List[Dict] from DocumentParser
+builder.add_step("ingest",    "file_ingest",    handler=ingestor.ingest_file)
+builder.add_step("normalize", "text_normalize", handler=normalizer.normalize)
+builder.add_step("extract",   "ner_extract",    handler=extractor.extract)
+builder.connect_steps("ingest",    "normalize")
+builder.connect_steps("normalize", "extract")
+
+pipeline = builder.build("normalize_pipeline")
+result   = ExecutionEngine().execute_pipeline(pipeline, data="data/documents/")
+```
+
+## 自定义规范化器
+
+在方法注册表中注册一个自定义规范化器：
+
+```python
+from semantica.normalize.registry import method_registry
+
+def my_normalizer(text, **kwargs):
+    return text.replace("Inc.", "Incorporated")
+
+method_registry.register("text", "expand_suffixes", my_normalizer)
+
+from semantica.normalize import normalize_text
+normalized = normalize_text("Apple Inc.", method="expand_suffixes")
+# → "Apple Incorporated"
+```
+
+- [解析](parse)——在规范化之前解析文档。
+- [切分](split)——把规范化后的文本分块，供嵌入使用。
+- [去重](deduplication)——在规范化之后解决重复实体。
+- [流水线](pipeline)——把规范化作为命名的流水线步骤接入。

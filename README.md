@@ -1,55 +1,40 @@
-# Mintlify Starter Kit
+# Semantica 中文文档
 
-Use the starter kit to get your docs deployed and ready to customize.
+Semantica 官方文档（[docs.getsemantica.ai](https://docs.getsemantica.ai/)）的简体中文版，基于 [Mintlify](https://mintlify.com) 构建，与英文源站结构、URL 一一对应。
 
-Click the green **Use this template** button at the top of this repo to copy the Mintlify starter kit. The starter kit contains examples with
+- **英文源**：[semantica-agi/semantica](https://github.com/semantica-agi/semantica) 仓库 `docs/` 目录（MIT License）
+- **覆盖范围**：全部 82 篇文档 —— 线上发布的 79 篇，外加仓库中 3 篇未发布的隐藏页（`changelog`、`storage-backends`、`migration/kg-provenance-tracker`）
+- **翻译原则**：信达雅；结构与源文逐项锁定（标题层级、列表、表格、JSX 组件）；代码块（含注释）字节级原样保留；术语遵循统一术语表
 
-- Guide pages
-- Navigation
-- Customizations
-- API reference pages
-- Use of popular components
-
-**[Follow the full quickstart guide](https://starter.mintlify.com/quickstart)**
-
-## AI-assisted writing
-
-Set up your AI coding tool to work with Mintlify:
+## 本地开发
 
 ```bash
-npx skills add https://mintlify.com/docs
-```
-
-This command installs Mintlify's documentation skill for your configured AI tools like Claude Code, Cursor, Windsurf, and others. The skill includes component reference, writing standards, and workflow guidance.
-
-See the [AI tools guides](/ai-tools) for tool-specific setup.
-
-## Development
-
-Install the [Mintlify CLI](https://www.npmjs.com/package/mint) to preview your documentation changes locally. To install, use the following command:
-
-```
 npm i -g mint
+mint dev        # 本地预览 http://localhost:3000
 ```
 
-Run the following command at the root of your documentation, where your `docs.json` is located:
+## 校验
 
+```bash
+cd ..
+python3 translation/verify_structure.py   # 与英文源逐篇比对结构一致性
 ```
-mint dev
-```
 
-View your local preview at `http://localhost:3000`.
+## 目录约定
 
-## Publishing changes
+- 页面为 `.mdx`（MDX），路径与英文源 `.md` 一一对应（如 `docs/guides/graphrag.md` → `guides/graphrag.mdx`）
+- 导航、分组与 Tab 结构见 `docs.json`（已译为中文）
+- 品牌资产（logo、示意图、custom.css）复刻自官方站点 `assets/`
 
-Install our GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app) to propagate changes from your repo to your deployment. Changes are deployed to production automatically after pushing to the default branch.
+## 翻译工程文件
 
-## Need help?
+位于仓库上层的 `../translation/`：
 
-### Troubleshooting
+- `terminology.md` —— 术语表（约束性，含保留英文清单与首现对照规则）
+- `rules.md` —— 翻译规则摘要
+- `batches.json` —— 翻译批次清单
+- `verify_structure.py` —— 结构一致性校验器
 
-- If your dev environment isn't running: Run `mint update` to ensure you have the most recent version of the CLI.
-- If a page loads as a 404: Make sure you are running in a folder with a valid `docs.json`.
+## License
 
-### Resources
-- [Mintlify documentation](https://mintlify.com/docs)
+文档内容遵循上游项目的 [MIT License](LICENSE)。

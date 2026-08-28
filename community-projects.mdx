@@ -1,0 +1,120 @@
+---
+title: "社区项目"
+description: "由 Semantica 社区构建的项目、扩展与集成。"
+icon: "people-group"
+---
+
+<Tip>
+  正在用 Semantica 构建什么？[在 GitHub 上提交](https://github.com/semantica-agi/semantica/issues/new?template=community_project.md)——我们很乐意在这里展示它。
+</Tip>
+
+Semantica 被学术界、企业与独立研究者广泛使用。以下是社区正在构建的生态一瞥。
+
+
+## 使用 Semantica 的项目
+
+### 学术研究
+
+学术界团队正用 Semantica 从非结构化的科学文献中构建结构化、可审计的知识。
+
+- **学术文献映射**：跨多年语料构建引文图谱，并带时序溯源
+- **生物医学知识图谱**：从 PubMed 与预印本订阅源连接基因、蛋白质、药物与疾病
+- **社交网络分析**：在实体链接的交互图谱上进行社区检测与影响力分析
+- **计算语言学**：指代消解流水线，输出实体链接结果，供下游 NLP 任务使用
+
+### 企业与行业
+
+生产环境部署遍布受监管、高风险的行业——在这些行业中，AI 问责不是可选项。
+
+- **商业智能**：基于申报文件、报告与内部文档构建的企业知识库
+- **网络安全与威胁情报**：攻击者归属图谱、关联 CVE 的威胁订阅源、事件时间线
+- **医疗与临床 AI**：患者安全图谱、药物相互作用知识库、符合 HIPAA 的审计追踪
+- **金融服务**：欺诈检测图谱、监管合规流水线（SOX/GDPR/MiFID II）、风险血缘
+- **法律与合规**：合同分析流水线、法规变更追踪、有证据支撑的研究图谱
+- **关键基础设施**：供应链风险图谱、电网事件图谱、物流溯源
+
+### 独立与开源
+
+- **GraphRAG 工具包**：构建在 Semantica 的 `context` 与 `vector_store` 模块之上的自定义检索层
+- **领域专属抽取器**：面向临床、法律与科学文本的 NER 与关系抽取器
+- **时序图谱仪表盘**：用 Semantica 的 `TemporalKnowledgeGraph` 加自定义可视化适配器构建的可视化时间线
+
+
+## 支持的集成
+
+<Tabs>
+  <Tab title="向量数据库">
+    | 存储 | 说明 |
+    | :---- | :---- |
+    | **FAISS** | 进程内，CPU/GPU |
+    | **Pinecone** | 托管向量云 |
+    | **Weaviate** | Schema 优先的混合搜索 |
+    | **Qdrant** | 高性能，Rust 原生 |
+    | **Milvus** | 企业级分布式 |
+    | **PgVector** | Postgres 原生，适合 SQL 技术栈 |
+  </Tab>
+  <Tab title="图数据库">
+    | 存储 | 说明 |
+    | :---- | :---- |
+    | **Neo4j** | 业界标准，Cypher 查询 |
+    | **FalkorDB** | Redis 协议，低延迟 |
+    | **Apache AGE** | PostgreSQL 扩展，OpenCypher |
+    | **Amazon Neptune** | AWS 托管，SPARQL + Gremlin |
+  </Tab>
+  <Tab title="LLM 提供商">
+    | 提供商 | 说明 |
+    | :-------- | :---- |
+    | **OpenAI** | GPT-4o、GPT-4、GPT-3.5 |
+    | **Anthropic** | Claude Opus、Sonnet、Haiku |
+    | **Google Gemini** |: |
+    | **Groq** | LLaMA、Mixtral：快速推理 |
+    | **Ollama** | 完全本地，可物理隔离 |
+    | **HuggingFace** |: |
+    | **DeepSeek** |: |
+    | **Novita AI** |: |
+    | **LiteLLM** | 100+ 模型网关 |
+  </Tab>
+  <Tab title="NLP 库">
+    | 库 | 说明 |
+    | :------- | :---- |
+    | **spaCy** | 生产级 NER 与依存句法分析 |
+    | **NLTK** | 分词与特征抽取 |
+    | **Sentence Transformers** | 语义嵌入 |
+    | **FastEmbed** | 轻量、推理快速 |
+  </Tab>
+</Tabs>
+
+
+## 社区扩展
+
+插件系统（`PluginRegistry`）让你无需改动核心代码即可添加新能力。社区已经构建了：
+
+- **自定义实体抽取器**：面向临床实体、法律条款类型与金融工具的领域专属 NER
+- **导出适配器**：面向专有行业系统的专门序列化格式
+- **Ingestor 插件**：面向 SharePoint、Notion、Confluence 与自定义数据库的适配器
+- **可视化插件**：基于 Plotly、D3.js 与自定义图谱渲染器的增强仪表盘
+- **评估工具**：使用 `semantica.evals` 的领域专属精确率/召回率基准
+
+
+## 构建你自己的扩展
+
+任何 Semantica 组件都可以通过注册表模式进行扩展：
+
+```python
+from semantica.ingest.registry import method_registry
+
+def my_ingestor(source):
+    return [{"text": "...", "metadata": {}, "source": source}]
+
+method_registry.register("file", "my_format", my_ingestor)
+```
+
+完整的扩展指南见[架构](architecture#extension-points)。
+
+
+## 如何贡献
+
+- [贡献指南](contributing-guide) —— 提交代码、文档、测试或实战手册 notebook。
+- [GitHub Issues](https://github.com/semantica-agi/semantica/issues) —— 报告 bug、请求功能或提出集成建议。
+- [Discord](https://discord.gg/sV34vps5hH) —— 与社区分享你正在构建的东西。
+- [GitHub Discussions](https://github.com/semantica-agi/semantica/discussions) —— 长文提问、设计讨论与想法。

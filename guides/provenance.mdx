@@ -1,0 +1,665 @@
+---
+title: "溯源与审计追踪"
+description: "Semantica 如何用符合 W3C PROV-O 规范的记录追踪每个实体、关系、文本块和属性的来源与血缘——带 SHA-256 完整性校验和、SQLite 持久化，以及面向国防、制药、银行与安全合规的跨模块审计追踪。"
+icon: "file-certificate"
+---
+
+## 什么是溯源？
+
+溯源（Provenance）是指系统性地记录数据来自哪里、经历了怎样的转换、以及在其生命周期中每一步由谁负责。与仅仅描述实体的普通图谱元数据不同，溯源会创建一条不可变的审计追踪，记录系统中每一条信息的完整历史。
+
+**核心溯源概念：**
+
+**血缘（Lineage）**追溯从原始来源出发、经由所有转换直至当前状态的监管链（chain of custody），精确展示数据如何随时间演变。
+
+**来源归因（Source Attribution）**记录生成每个数据元素的具体文档、数据库、API 调用或人工输入，从而支持精确引用与核验。
+
+**完整性校验（Integrity Verification）**使用加密校验和来检测溯源记录创建之后发生的任何未授权更改。
+
+**审计追踪（Audit Trail）**通过维护所有数据操作、转换与决策的防篡改日志来满足监管合规。
+
+溯源与简单元数据的区别在于：它创建的是具有法律效力、可密码学验证的记录，能够回答这些关键问题：「它从哪里来？」「谁处理了它？」「它何时发生了变化？」「它是否被篡改过？」
+
+## 为什么使用溯源？
+
+**满足监管合规要求。** 符合 FDA 21 CFR Part 11、ICH E6(R2) GCP、Basel III BCBS 239 以及国防情报共享协议的要求——这些规范都强制要求数据完全可追溯和电子记录完整性。
+
+**来源归因与引用。** 将每个实体、关系和属性值追溯到其确切的来源文档、API 响应或人工输入，以实现科学可复现性与法律可辩护性。
+
+**可审计与透明。** 为审计师、监管者和利益相关方提供对数据处理工作流的完整可见性，包括谁执行了每个操作、变更何时发生。
+
+**冲突解决与数据质量。** 当多个来源为同一属性给出不同取值时，溯源记录让基于证据的冲突解决成为可能：比较来源的可信度、时新性与置信度水平。
+
+**篡改检测与取证。** 密码学完整性校验能够发现对数据记录的未授权修改，为安全敏感环境中的事件响应与取证分析提供支撑。
+
+**数据血缘可追溯。** 回答关于数据谱系的复杂问题，尤其是在多阶段处理流水线中——实体要经历抽取、富化、融合与分析等转换。
+
+## 何时使用 / 何时不用
+
+**溯源追踪适用于：**
+- 需要审计追踪的受监管环境（医疗、金融、国防、制药）
+- 多源数据融合，且冲突信息必须依靠证据来解决
+- 数据质量与来源可信度至关重要的长期存续知识图谱（Knowledge Graph）
+- 数据完整性与篡改检测至关重要的生产环境系统
+- 实体经历多次转换的复杂处理流水线
+- 需要为基于抽取数据的决策提供法律可辩护性的情形
+
+**以下情况可能不需要溯源：**
+- 无合规要求的简单原型与概念验证演示
+- 一次性处理数据并立即丢弃结果的临时工作流
+- 不跨会话持久化数据的无状态应用
+- 使用可信单源数据的内部研究项目
+- 溯源开销影响性能的高频低延迟操作
+- 所有数据都来自单一高度可信且从不变化的来源的场景
+
+**以下情况请考虑更简单的替代方案：**
+- 基础元数据（创建时间戳、源文件名）已能提供足够的可追溯性
+- 仅靠版本控制即可实现透明且可复现的数据处理
+- 监管合规不要求密码学完整性校验
+
+`ProvenanceManager` 会为每个实体、关系、文档文本块（chunk）和属性值记录一条符合 W3C PROV-O 规范的条目——带 SHA-256 校验和用于篡改检测，并在每次调用 `track_entity()` 时自动构建版本链。当你需要回答这样的监管问题——某个值从何而来、由谁写入、自首次摄取以来是否发生过变化——就使用它。
+
+<Info>
+KG 流水线会对它抽取的所有内容自动调用 `track_entity()` 和 `track_relationship()`，因此经由标准流水线进入的实体已经被追踪。当你需要自定义审计集成、跨模块的血缘链，或跨多个来源的细粒度属性级归因时，再使用本文介绍的手动 API。
+</Info>
+
+## 搭建溯源存储
+
+`ProvenanceManager` 支持两种存储后端。内存存储零依赖，适合测试。SQLite 存储可在重启后持久保留、支持并发读取，并为你的合规团队提供一个可以直接查询的标准数据库。
+
+```python
+from semantica.provenance import ProvenanceManager
+
+# In-memory — session only, no persistence
+prov = ProvenanceManager()
+
+# SQLite — persists to disk, free concurrent reads
+prov = ProvenanceManager(storage_path="provenance.db")
+
+# Custom backend — pass any ProvenanceStorage implementation
+from semantica.provenance.storage import SQLiteStorage
+prov = ProvenanceManager(storage=SQLiteStorage("audit.db"))
+```
+
+对于任何受监管的部署——安全运营、临床数据、金融风险——请使用 `storage_path`。SQLite 文件可以备份、纳入版本管理，并用标准工具查询，无需服务器。
+
+<Note>
+  `SQLiteStorage` 会自动配置 Write-Ahead Logging（`WAL`）、`busy_timeout=5000` 与 `synchronous=NORMAL`，并在原子立即事务（`BEGIN IMMEDIATE`）中执行读-改-写操作（如 `track_entity()`）；普通读取（`retrieve()`、`trace_lineage()`）使用独立连接、不加显式写锁，因此不会排在写入者之后串行执行。此外，自定义存储后端只需覆盖 `trace_lineage(self, entity_id)`，`ProvenanceManager` 即可自动支持，签名中无需 `max_depth`。
+</Note>
+
+## 摄取数据时记录溯源
+
+数据进入图谱的那一刻，就是必须记录溯源的时刻。`track_entity()` 会捕获来源文档、时间戳、执行抽取的操作者或流水线、来自源头的逐字引文，以及一个置信度得分。它返回 `Optional[ProvenanceEntry]`（成功时为 `ProvenanceEntry`；若存储在全新实体上失败则为 `None`），并自动计算 SHA-256 校验和。
+
+```python
+# Ingesting CVE-2024-3400 from NVD and a commercial feed
+# Both are tracked separately so the full multi-source picture is preserved.
+
+entry_nvd = prov.track_entity(
+    entity_id="cve-2024-3400",
+    source="NVD_feed_2024-04-12",
+    metadata={
+        "cvss_score": 10.0,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+        "exploit_status": "unconfirmed",
+    },
+    confidence=0.98,
+    entity_type="vulnerability",
+    activity_id="nvd_feed_ingestion",
+    source_location="CVE-2024-3400 JSON record",
+    source_quote='{"cvssMetricV31":[{"cvssData":{"baseScore":10.0}}]}',
+)
+
+print(f"Entity tracked : {entry_nvd.entity_id}")
+print(f"Source         : {entry_nvd.source_document}")
+print(f"Timestamp      : {entry_nvd.timestamp}")
+print(f"Checksum       : {entry_nvd.checksum}")       # SHA-256 hex digest
+print(f"First seen     : {entry_nvd.first_seen}")     # set on first call only
+```
+
+```text
+Entity tracked : cve-2024-3400
+Source         : NVD_feed_2024-04-12
+Timestamp      : 2024-04-12T14:22:07.881Z
+Checksum       : 3f7a9c2d...                          # tamper-detectable
+First seen     : 2024-04-12T14:22:07.881Z
+```
+
+一小时后，再追踪来自商业订阅源的同一实体。对同一个 `entity_id` 再次调用 `track_entity()`，会自动把 NVD 条目归档为历史记录，并创建一条通过 `parent_entity_id` 与之关联的新当前条目：
+
+```python
+entry_commercial = prov.track_entity(
+    entity_id="cve-2024-3400",
+    source="commercial_feed_2024-04-12",
+    metadata={
+        "cvss_score": 9.8,
+        "exploit_status": "in_wild",
+        "observed_exploitation": True,
+    },
+    confidence=0.91,
+    entity_type="vulnerability",
+    activity_id="commercial_feed_ingestion",
+)
+
+# The NVD entry is now archived as cve-2024-3400:v:2024-04-12T14:22:07
+# The commercial entry is the new current state
+# entry_commercial.parent_entity_id == "cve-2024-3400:v:2024-04-12T14:22:07"
+```
+
+版本链是自动构建的。你无需手动管理历史条目。
+
+## 追踪多来源的属性值
+
+当同一属性在多个来源中出现不同取值时——CVE 得分正是这种情形——使用 `track_property_source()` 分别记录每一条归因。这些记录会直接输入下游的冲突检测：冲突模块可以比较某个属性所有被追踪的取值，并在揭示分歧时附上完整的来源元数据。
+
+**SourceReference** 是一个结构化的元数据容器，精确记录一条信息在文档中的出处。它包含文档标识符、具体位置（页码、章节、字节区间）、置信度水平，以及面向领域特定归因需求的自定义元数据字段。
+
+```python
+from semantica.provenance.schemas import SourceReference
+
+nvd_ref = SourceReference(
+    document="NVD_feed_2024-04-12",
+    section="cvssMetricV31",
+    confidence=0.98,
+    metadata={"publisher": "NIST", "feed_type": "NVD"},
+)
+
+commercial_ref = SourceReference(
+    document="commercial_feed_2024-04-12",
+    section="cvss_assessment",
+    confidence=0.91,
+    metadata={"publisher": "ThreatFeed-Co", "observed": True},
+)
+
+# Track each source's value separately under the same entity + property key
+prov.track_property_source("cve-2024-3400", "cvss_score", 10.0, nvd_ref)
+prov.track_property_source("cve-2024-3400", "cvss_score", 9.8,  commercial_ref)
+
+# Property sources are stored under "<entity_id>_<property_name>"
+# Later: retrieve all sources for this property to answer "where did 9.8 come from?"
+sources = prov.get_all_sources("cve-2024-3400_cvss_score")
+for s in sources:
+    print(f"{s['source']:<35}  confidence={s['confidence']:.2f}  loc={s['location'] or '—'}")
+```
+
+```text
+NVD_feed_2024-04-12                   confidence=0.98  loc=cvssMetricV31
+commercial_feed_2024-04-12            confidence=0.91  loc=cvss_assessment
+```
+
+当监管者问「9.8 是从哪来的？」时，答案就是：`commercial_feed_2024-04-12`、章节 `cvss_assessment`、置信度 0.91，完整元数据还表明这是一家商业发布商报告了已观测到的在野利用。
+
+## 追踪节点的血缘
+
+当一个实体有了多条溯源条目，你就可以追踪它的完整历史，了解它如何随时间演变。摄取六个月后，运行一次血缘追踪。`get_lineage()` 返回完整的版本链——实体经历的每一个状态，从旧到新——以及汇总元数据：
+
+```python
+lineage = prov.get_lineage("cve-2024-3400")
+
+print(f"Entity      : {lineage['entity_id']}")
+print(f"First seen  : {lineage['first_seen']}")
+print(f"Last updated: {lineage['last_updated']}")
+print(f"History depth: {lineage['entity_count']} entries")
+print(f"Sources seen : {lineage['source_documents']}")
+print()
+print("Full version chain (oldest → newest):")
+for entry in lineage["lineage_chain"]:
+    print(f"  [{entry['timestamp'][:19]}]  agent={entry['agent_id']}")
+    print(f"    source={entry['source_document']}")
+    print(f"    activity={entry['activity_id']}")
+```
+
+```text
+Entity      : cve-2024-3400
+First seen  : 2024-04-12T14:22:07.881Z
+Last updated: 2024-10-08T09:11:44.302Z
+History depth: 4 entries
+Sources seen : ['NVD_feed_2024-04-12', 'commercial_feed_2024-04-12',
+                'NVD_feed_2024-07-18', 'commercial_feed_2024-10-08']
+
+Full version chain (oldest → newest):
+  [2024-04-12T14:22:07]  agent=semantica
+    source=NVD_feed_2024-04-12
+    activity=nvd_feed_ingestion
+  [2024-04-12T15:18:33]  agent=semantica
+    source=commercial_feed_2024-04-12
+    activity=commercial_feed_ingestion
+  [2024-07-18T08:04:11]  agent=semantica
+    source=NVD_feed_2024-07-18
+    activity=nvd_feed_ingestion       # NVD updated their score
+  [2024-10-08T09:11:44]  agent=semantica
+    source=commercial_feed_2024-10-08
+    activity=commercial_feed_ingestion
+```
+
+这条链回答了监管者的全部三个问题。9.8 来自 `commercial_feed_2024-04-12`。操作者是 `threat_ingest_pipeline_v2`。得分确实变过——NVD 在 7 月 18 日更新了他们的记录——链上精确显示了变化时间。
+
+## 校验完整性
+
+每条 `ProvenanceEntry` 都带有写入时计算的 SHA-256 校验和。如果任何字段在事后被修改——无论出于配置错误的流水线、数据库迁移，还是蓄意篡改——重新计算时校验和都将无法匹配。
+
+完整性校验对监管合规与取证分析至关重要。请把完整性检查作为每次合规审计的一部分来执行：
+
+```python
+from semantica.provenance.integrity import compute_checksum
+
+raw_entries = prov.trace_lineage("cve-2024-3400")
+
+print("Integrity check:")
+for e in raw_entries:
+    stored   = e.checksum
+    computed = compute_checksum(e)
+    status   = "OK" if stored == computed else "TAMPERED"
+    print(f"  [{status}] {e.entity_id[:50]}  {(stored or '')[:16]}...")
+```
+
+```text
+Integrity check:
+  [OK] cve-2024-3400                                 3f7a9c2d...
+  [OK] cve-2024-3400:v:2024-04-12T14:22:07           a1b2c3d4...
+  [OK] cve-2024-3400:v:2024-04-12T15:18:33           e5f6a7b8...
+  [OK] cve-2024-3400:v:2024-07-18T08:04:11           c9d0e1f2...
+```
+
+`TAMPERED` 状态意味着存储的哈希与按当前字段值重新计算的结果不一致——这就是写入后遭到修改的证据，必须先调查清楚，记录才能用于合规用途。
+
+## 追踪文档文本块及其子块
+
+溯源不仅仅用于实体。当文档为了检索增强生成（RAG）或自然语言处理工作流而被切分为文本块时，每个文本块都需要自己的溯源记录，把它与源文件和字节区间关联起来。
+
+子文本块（来自递归切分）通过 `parent_chunk_id` 链接到父块；该字段对应 W3C PROV-O 标准中的 `prov:wasDerivedFrom`：
+
+```python
+# Track the parent chunk (a section of an advisory PDF)
+prov.track_chunk(
+    chunk_id="advisory_section_3",
+    source_document="CISA_advisory_AA24-099A.pdf",
+    source_path="/feeds/cisa/advisories/AA24-099A.pdf",
+    start_index=4096,
+    end_index=8192,
+)
+
+# Track a child chunk derived from recursive splitting
+prov.track_chunk(
+    chunk_id="advisory_section_3a",
+    source_document="CISA_advisory_AA24-099A.pdf",
+    source_path="/feeds/cisa/advisories/AA24-099A.pdf",
+    start_index=4096,
+    end_index=6144,
+    parent_chunk_id="advisory_section_3",   # prov:wasDerivedFrom
+)
+
+# Retrieve the provenance record for a chunk
+record = prov.get_provenance("advisory_section_3a")
+if record:
+    print(f"Source   : {record['source_document']}")
+    print(f"Range    : bytes {record['start_index']}–{record['end_index']}")
+    print(f"Parent   : {record['parent_entity_id']}")  # advisory_section_3
+    print(f"Checksum : {record['checksum']}")
+```
+
+在 GDPR 删除权工作流中，每个文本块溯源记录里的字节区间能精确告诉你：当数据主体提出删除请求时，应删除哪个文档的哪一部分。
+
+## 溯源存储的统计信息
+
+在一次大规模摄取运行之后，`get_statistics()` 会给出所有被追踪内容的汇总：
+
+```python
+stats = prov.get_statistics()
+
+print(f"Total tracked    : {stats['total_entries']}")
+print(f"By entity type   : {stats['entity_types']}")
+print(f"Unique sources   : {stats['unique_sources']}")
+```
+
+```text
+Total tracked    : 14,822
+By entity type   : {'vulnerability': 3041, 'chunk': 8204, 'relationship': 2891,
+                    'property': 686}
+Unique sources   : 12
+```
+
+这份汇总是合规证明的起点：你可以陈述被追踪记录的总数、不同数据来源的数量，以及按记录类型的分布。
+
+## 常见陷阱
+
+**溯源不保证真实。** 溯源记录忠实追踪信息来自哪里、如何被处理，但无法验证原始来源本身是否准确。一条文档完备的链，若源头有缺陷或恶意，产出的数据依旧不可靠。
+
+**复用泛化的来源标识符。** 使用「daily_feed」「batch_001」这类无区分度的来源 ID，会让个别记录无法追溯回确切出处。请始终在来源文档名中包含时间戳、版本号或唯一的批次标识符。
+
+**绕过溯源工作流。** 手工插入数据、或使用跳过 `track_entity()` 调用的临时脚本，都会在审计追踪中留下缺口。请确保所有数据入口——自动化流水线、人工修正、管理操作——都记录恰当的溯源。
+
+**忽视血缘校验。** 在多阶段处理流水线中，溯源链可能变得复杂。请定期验证 `get_lineage()` 和 `trace_lineage()` 返回的链完整且合乎逻辑，没有缺失环节或循环引用。
+
+**在低价值场景中滥用溯源。** 为每个中间计算或临时变量记录溯源，只会带来存储开销而无合规收益。请把溯源追踪集中在具有法律、监管或业务意义的实体、关系和属性上。
+
+**不校验完整性校验和。** 密码学完整性校验只有在你真的去检查时才有效。请在审计工作流和事件响应程序中纳入定期运行 `compute_checksum()` 校验。
+
+**混用溯源粒度。** 有些实体在文档层级追踪、另一些在句子层级追踪，会造成审计追踪不一致。请为每种数据类型和处理工作流建立一致的粒度标准。
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防 — CTI/威胁">
+
+信号情报融合单元会追踪每个情报实体的监管路径——从原始采集、分析处理直到成品。链条的每一层——原始采集、命名实体识别（NER）抽取、融合、成品情报——都必须分开记录，并附上相应的密级处理与操作者身份。溯源链就是监管链：它证明成品情报产品的每一步都可追溯到经授权的采集与经授权的分析。
+
+在 ITAR 与情报界共享协议之下，溯源记录必须显示：哪个采集方法产出了原始数据、哪位分析师处理了它、哪个融合活动把它与其他情报结合，直至实体进入成品。`track_chunk()`、`track_entity()` 和 `track_relationship()` 各自对应这条链中的一层。
+
+```python
+from semantica.provenance import ProvenanceManager
+from semantica.provenance.schemas import SourceReference
+
+prov = ProvenanceManager(storage_path="intel_provenance.db")
+
+# Tier 1: Raw collection
+prov.track_chunk(
+    chunk_id="osint_collection_20260621_0442Z",
+    source_document="COLLECTION_TASKING_TK-2026-0192",
+    source_path="/osint/raw/20260621_0442Z.txt",
+    start_index=0,
+    end_index=2048,
+    classification="UNCLASSIFIED//FOUO",
+    collection_method="OSINT",
+    collector_id="STATION_ECHO",
+)
+
+# Tier 2: Entity extracted from collection
+prov.track_entity(
+    entity_id="threat_actor_DELTA9",
+    source="osint_collection_20260621_0442Z",
+    metadata={"label": "THREAT_ACTOR", "confidence_level": "C2"},
+    confidence=0.87,
+    entity_type="threat_actor",
+    activity_id="ner_extraction",
+    source_location="paragraph_3",
+)
+
+# Tier 3: Campaign relationship from all-source fusion
+prov.track_relationship(
+    relationship_id="DELTA9_operates_CAMPAIGN_IRON",
+    source="FUSION_REPORT_FP-2026-0447",
+    metadata={"type": "operates", "confidence": 0.81},
+    confidence=0.81,
+    activity_id="all_source_fusion",
+)
+
+# Tier 4: Property from two independent INT sources
+humint_src = SourceReference(
+    document="HUMINT_REPORT_HR-2026-0821",
+    confidence=0.91,
+    metadata={"classification": "SECRET", "source_country": "PARTNER_5EYES"},
+)
+imint_src = SourceReference(
+    document="IMINT_PRODUCT_IP-2026-1104",
+    page=3,
+    section="Ground Truth Assessment",
+    confidence=0.87,
+    metadata={"sensor": "OPIR", "resolution_m": 0.3},
+)
+prov.track_property_source("DELTA9", "location_country", "COUNTRY_X", humint_src)
+prov.track_property_source("DELTA9", "location_country", "COUNTRY_X", imint_src)
+
+# Finished product audit — full chain of custody
+lineage = prov.get_lineage("threat_actor_DELTA9")
+print("Chain of custody:")
+for entry in lineage["lineage_chain"]:
+    print(f"  [{entry['timestamp'][:19]}]  {entry['activity_id']}  agent={entry['agent_id']}")
+
+# Corroborating INT sources for the location assessment
+sources = prov.get_all_sources("DELTA9_location_country")
+for s in sources:
+    print(f"  INT source: {s['source']}  (conf={s['confidence']:.2f})")
+```
+
+</Tab>
+
+<Tab title="安全 — SOC/事件响应">
+
+SOC 威胁情报平台会追踪每个 CVE——从首次 NVD 摄取，到富化运行、CVSS 更新，再到分析师标注。溯源链能回答事件响应中最要紧的问题：「这条漏洞记录是最新的吗？自我们上次检查以来，CVSS 得分有没有被修订？」
+
+在同一个 `entity_id` 上反复调用 `track_entity()` 所构建的版本链，为你提供完整的更新历史。如果 NVD 在概念验证公开后把得分从 7.5 修订为 9.8，链上会显示这次修订的精确时间戳，以及是哪条流水线写入了更新值。
+
+```python
+from semantica.provenance import ProvenanceManager
+from semantica.provenance.schemas import SourceReference
+from semantica.provenance.integrity import compute_checksum
+
+prov = ProvenanceManager(storage_path="soc_provenance.db")
+
+# Initial NVD ingestion
+prov.track_entity(
+    entity_id="cve-2023-44487",
+    source="NVD_feed_2023-10-10",
+    metadata={"cvss_score": 7.5, "description": "HTTP/2 Rapid Reset DDoS"},
+    confidence=0.98,
+    entity_type="vulnerability",
+    activity_id="nvd_feed_ingestion",
+)
+
+# Six weeks later: NVD revised the score after PoC publication
+prov.track_entity(
+    entity_id="cve-2023-44487",
+    source="NVD_feed_2023-11-22",
+    metadata={"cvss_score": 7.5, "kev_added": True, "known_exploited": True},
+    confidence=0.98,
+    entity_type="vulnerability",
+    activity_id="nvd_feed_update",
+)
+
+# Track CISA KEV addition as a separate property source
+kev_ref = SourceReference(
+    document="CISA_KEV_catalog_2023-11-22",
+    section="Known Exploited Vulnerabilities",
+    confidence=1.0,
+    metadata={"publisher": "CISA", "mandatory_remediation": True},
+)
+prov.track_property_source("cve-2023-44487", "known_exploited", True, kev_ref)
+
+# Incident response query: full history for this CVE
+lineage = prov.get_lineage("cve-2023-44487")
+print(f"CVE first seen  : {lineage['first_seen'][:10]}")
+print(f"CVE last updated: {lineage['last_updated'][:10]}")
+print(f"Update count    : {lineage['entity_count']} records")
+
+# Integrity check before relying on the record for a patch decision
+entries = prov.trace_lineage("cve-2023-44487")
+for e in entries:
+    ok = compute_checksum(e) == e.checksum
+    print(f"  [{('OK' if ok else 'TAMPERED')}] {e.timestamp[:19]}  source={e.source_document}")
+```
+
+</Tab>
+
+<Tab title="生命科学 — 临床/制药">
+
+临床证据图谱会追踪有效性数据——从源出版物、经结构化抽取、直到监管申报。W3C PROV-O 链满足 ICH E6(R2) GCP 对数据可追溯性的要求，以及 21 CFR Part 11 对电子记录完整性的要求。申报包中的每个实体都必须能追溯到一份来源文档、一个抽取活动和一个操作者。
+
+`track_property_source()` 在这里尤为重要：当两项独立研究就同一终点报告不同的有效性值时，每项都必须带着完整的引用元数据分开追踪。由此得到的多来源记录是荟萃分析（meta-analysis）的证据基础，溯源条目则成为监管卷宗中的支持性文档。
+
+```python
+from semantica.provenance import ProvenanceManager
+from semantica.provenance.schemas import SourceReference
+from semantica.provenance.integrity import compute_checksum
+
+prov = ProvenanceManager(storage_path="clinical_provenance.db")
+
+# Track the source document chunk (Phase III study report section)
+prov.track_chunk(
+    chunk_id="phase3_primary_endpoint_C4591001",
+    source_document="STUDY_REPORT_BNT162b2_C4591001_MOD2",
+    source_path="/submissions/EMA_rolling_review/mod2_clinical_overview.pdf",
+    start_index=4096,
+    end_index=6144,
+    study_phase="Phase_III",
+    ctgov="NCT04368728",
+    sponsor="BioNTech_Pfizer",
+)
+
+# Track extracted efficacy entity with verbatim source quote
+prov.track_entity(
+    entity_id="VE_primary_BNT162b2_C4591001",
+    source="phase3_primary_endpoint_C4591001",
+    metadata={"value": "95.0%", "CI_95": "[90.3–97.6]", "label": "EFFICACY_MEASURE"},
+    confidence=0.99,
+    entity_type="clinical_endpoint",
+    activity_id="structured_data_extraction",
+    source_quote="Vaccine efficacy against COVID-19 was 95.0% (95% CI, 90.3–97.6)",
+)
+
+# Multi-study property tracking for meta-analysis
+study1 = SourceReference(
+    document="NEJM_doi_10.1056_NEJMoa2034577",
+    page=9, section="Table 2",
+    confidence=0.99,
+    metadata={"study_id": "C4591001", "n_participants": 43448},
+)
+study2 = SourceReference(
+    document="Lancet_doi_10.1016_S0140-6736_21_00448-7",
+    page=6, section="Results",
+    confidence=0.97,
+    metadata={"study_id": "EXT_COHORT", "n_participants": 9119},
+)
+prov.track_property_source("BNT162b2", "vaccine_efficacy_symptomatic_covid19", "95.0", study1)
+prov.track_property_source("BNT162b2", "vaccine_efficacy_symptomatic_covid19", "94.1", study2)
+
+# Regulatory submission audit — evidence chain
+lineage = prov.get_lineage("VE_primary_BNT162b2_C4591001")
+print("Evidence chain for regulatory submission:")
+for entry in lineage["lineage_chain"]:
+    print(f"  {entry['timestamp'][:10]} | {entry['source_document'][:45]} | "
+          f"agent={entry['agent_id']}")
+
+# Integrity verification (21 CFR Part 11 requirement)
+entries = prov.trace_lineage("VE_primary_BNT162b2_C4591001")
+for e in entries:
+    status = "OK" if compute_checksum(e) == e.checksum else "TAMPERED"
+    print(f"  Integrity [{status}]: {e.entity_id}")
+
+stats = prov.get_statistics()
+print(f"\nTotal evidence records in dossier: {stats['total_entries']}")
+```
+
+</Tab>
+
+<Tab title="银行 — 风险/合规">
+
+房贷发放系统会为每个信贷决策记录完整溯源，满足 SR 11-7 模型风险管理指引与 EBA 模型文档要求。授信模型使用的每个特征——信用分、DTI 比率、房产估值——都必须能追溯到其源数据拉取、运行模型的操作者，以及决策的时间戳。
+
+房产估值通过 `track_property_source()` 从两个来源（RICS 评估与 AVM 估算）分别追踪，让合规团队完整了解 LTV 如何计算、模型最终依赖的是哪种估值方法。
+
+```python
+from semantica.provenance import ProvenanceManager
+from semantica.provenance.schemas import SourceReference
+
+prov = ProvenanceManager(storage_path="credit_provenance.db")
+app_id = "APP-2026-994421"
+
+# Track the bureau data pull
+prov.track_chunk(
+    chunk_id=f"{app_id}_bureau_pull",
+    source_document=f"EXPERIAN_CREDITEXPERT_{app_id}_2026-06-21",
+    source_path=f"/bureau/experian/{app_id}/2026-06-21.json",
+    start_index=0,
+    end_index=4096,
+    bureau="Experian",
+    pull_timestamp="2026-06-21T09:14:32Z",
+    consent_ref=f"CONSENT-{app_id}",
+)
+
+# Batch-track extracted credit features
+features = [
+    {"id": f"{app_id}_credit_score",         "confidence": 1.0, "value": 714},
+    {"id": f"{app_id}_dti_ratio",             "confidence": 1.0, "value": 0.38},
+    {"id": f"{app_id}_derogatory_count_7yr",  "confidence": 1.0, "value": 0},
+]
+prov.track_entities_batch(
+    features,
+    source=f"{app_id}_bureau_pull",
+    entity_type="credit_feature",
+    activity_id="bureau_parsing",
+    agent_id="credit_data_service_v2",
+)
+
+# Track competing property valuations
+rics_val = SourceReference(
+    document=f"RICS_VALUATION_{app_id}_2026-06-18",
+    page=3, section="Market Value Assessment",
+    confidence=0.96,
+    metadata={"valuer": "JLL_Residential", "method": "comparable_sales"},
+)
+avm_val = SourceReference(
+    document=f"AVM_ESTIMATE_{app_id}_2026-06-21",
+    confidence=0.84,
+    metadata={"provider": "Hometrack_AVM", "model_version": "v8.3"},
+)
+prov.track_property_source(app_id, "property_value_GBP", "410000", rics_val)
+prov.track_property_source(app_id, "property_value_GBP", "403500", avm_val)
+
+# Track the underwriting decision itself
+prov.track_entity(
+    entity_id=f"DECISION_{app_id}",
+    source=f"{app_id}_bureau_pull",
+    metadata={"outcome": "approved_conditional_lmi", "model": "underwriting_model_v4"},
+    confidence=0.89,
+    entity_type="credit_decision",
+    activity_id="automated_underwriting",
+)
+
+# SR 11-7 audit output
+print("=== MODEL AUDIT TRAIL ===")
+lineage = prov.get_lineage(f"DECISION_{app_id}")
+for entry in lineage["lineage_chain"]:
+    print(f"  [{entry['timestamp'][:19]}]  {entry['activity_id']}  agent={entry['agent_id']}")
+
+print("\n=== PROPERTY VALUATION SOURCES ===")
+for s in prov.get_all_sources(f"{app_id}_property_value_GBP"):
+    print(f"  {s['source'][:55]}  conf={s['confidence']:.2f}")
+
+stats = prov.get_statistics()
+print(f"\nTotal audit records: {stats['total_entries']}  |  Sources: {stats['unique_sources']}")
+```
+
+</Tab>
+
+</Tabs>
+
+## 与 W3C PROV-O 的映射
+
+每条 `ProvenanceEntry` 都直接映射到 W3C PROV-O 术语。如果你的合规团队或监管者要求 PROV-O 导出，字段映射是一一对应的：
+
+| PROV-O 术语 | `ProvenanceEntry` 字段 | 记录的内容 |
+| :--- | :--- | :--- |
+| `prov:Entity` | `entity_id` | 被追踪的对象——实体、文本块、关系或属性 |
+| `prov:Activity` | `activity_id` | 产出该对象的过程——`"ner_extraction"`、`"bureau_parsing"` |
+| `prov:Agent` / `prov:Person` / `prov:SoftwareAgent` / `prov:Organization` | `agent_id`, `agent_type`, `is_automated` | 谁——或者什么——执行了该活动，以及是否有真人直接承担责任 |
+| `prov:qualifiedAssociation` + `prov:hadRole` | `role` | 该智能体针对这个具体实体的角色——`"generator"`（默认）、`"approver"`、`"reviewer"`——用于签核/四眼（four-eyes）工作流 |
+| `prov:wasDerivedFrom` | `parent_entity_id`（旧版合并字段） | 此实体的先前版本或来源 |
+| — | `previous_version_id` | 本条目更正/替换*同一*事实的先前版本 |
+| `prov:wasDerivedFrom` | `derived_from_id` | 本条目派生自*另一个*来源实体 |
+| `prov:used` | `used_entities` | 生成本条目所消耗的实体 ID |
+| `prov:generatedAtTime` | `timestamp` | ISO 日期时间，写入时自动设为 `utc_now_iso()` |
+| `prov:qualifiedInvalidation` | `invalidated`, `invalidated_at_time`, `invalidated_by`, `invalidation_reason` | 通过 `ProvenanceManager.invalidate()` 以墓碑（tombstone）形式记录的撤回/更正，绝不物理删除 |
+| `prov:startedAtTime` / `prov:endedAtTime` | `activity_started_at_time`, `activity_ended_at_time` | 类型化 Activity 的计时——通过 `activity=` 关键字参数传入 `ActivityRecord`，可在设置 `activity_id` 的同时设置这两者 |
+| `prov:qualifiedGeneration`/`Generation`, `qualifiedUsage`/`Usage`, `qualifiedDerivation`/`Derivation` | （由上述字段派生） | `wasGeneratedBy`/`used`/`wasDerivedFrom` 的附加式限定形式，与普通三元组一同自动生成 |
+| `prov:wasAssociatedWith` | （由 `agent_id` 派生） | 直接的 Activity→Agent 链接，区别于 Entity→Agent 的 `wasAttributedTo` |
+| `prov:actedOnBehalfOf` | `acted_on_behalf_of` | Agent→Agent 委托——例如自动化智能体代表授权它的人类/组织行事 |
+| `prov:wasInformedBy` | `informed_by_activities`（以 `informed_by=[...]` 传入） | 把本条目的活动链接到它所由获知的先前活动（例如流水线中受前一阶段告知的阶段） |
+| `prov:Bundle` + `prov:hadMember` | `bundle_id` | 按来源/数据集/摄取运行对条目分组（成员关系三元组，并非真正的 RDF 具名图分区） |
+| — | `valid_from`, `valid_until`, `revision_type`, `supersedes` | 从已弃用的 `kg.ProvenanceTracker` 合并而来的双时态字段——始终由调用方提供（绝不自动计算），经 `ProvenanceManager.revision_history()` 呈现；对于未显式设置的条目，该函数会回退为基于时间戳的推导 |
+
+`previous_version_id` 与 `derived_from_id` 是在 `parent_entity_id` 之外附加的——读取 `parent_entity_id` 的现有代码行为不变，而新代码可以区分这两种关系。
+
+`checksum` 字段不属于 PROV-O 标准——它是 Semantica 的篡改检测扩展。现在每条目的 SHA-256 还会纳入 `previous_checksum`（按 `sequence_id` 的插入顺序取前一条目的校验和），从而把每条目与其前一条链接起来。`ProvenanceManager.verify_chain()` 会遍历整条链并报告任何断点——包括从底层表中硬删除的行，而单条逐行校验和本身无法检测到这种情况。
+
+注意：上文的银行示例向 `track_entities_batch()` 传入了 `agent_id="credit_data_service_v2"`——现在这会真正填充条目的 `agent_id` 字段（此前有个 bug：批次级类型化关键字参数如 `agent_id`/`entity_type`/`activity_id` 会被悄悄吞进不透明的 `metadata` 数据块里）。
+
+`export_prov()` 在 `ProvenanceManager.DEFAULT_BASE_URI` 之下铸造实体/智能体/活动 URI（默认为 `https://semantica.dev/ns#`——与 `RDFExporter` 的 `NamespaceManager` 用于其 `"semantica"` 前缀的命名空间相同，因此同一 `entity_id` 的 KG 导出 URI 与 PROV 导出 URI 可以共同解析），除非通过 `export_prov(base_uri=...)` 或 CLI 的 `--base-uri` 选项覆盖。
+
+## 相关指南
+
+- [语义抽取](semantic-extraction)——为每个抽取实体自动生成溯源条目的 NER 与关系抽取流水线
+- [冲突解决](conflict-resolution)——溯源属性来源直接输入冲突检测；每个解决后的值都可追溯到其来源
+- [去重](deduplication)——合并操作记录在合并历史中；与溯源配合可获得从来源到规范实体的完整血缘
+- [溯源参考](../reference/provenance)——完整的存储后端 API、`InMemoryStorage`、`SQLiteStorage` 与 `ProvenanceEntry` Schema

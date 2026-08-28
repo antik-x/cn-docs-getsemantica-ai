@@ -5,3 +5,6 @@
 # Draft content
 drafts/
 *.draft.mdx
+
+# Project meta files (not docs pages)
+AGENTS.md

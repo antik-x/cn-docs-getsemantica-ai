@@ -1,0 +1,618 @@
+---
+title: "去重与实体合并"
+description: "使用多因子相似度检测重复实体，用可配置的策略合并它们，让你的知识图谱在大规模下保持干净。"
+---
+
+## 什么是去重？
+
+去重是识别那些指向同一现实世界对象、却在你的数据中以独立记录出现的实体，并将它们合并为单一规范表示的过程。这一过程消解了数据来自多个来源时出现的别名、拼写变体和格式差异。
+
+**去重的关键概念：**
+
+**规范实体** 是合并所有重复记录之后，一个现实世界对象的唯一权威表示。规范实体成为知识图谱（Knowledge Graph）中所有关系指向的那个节点。
+
+**别名** 是同一实体的替代名称或标识符。例如，"APT29"、"Cozy Bear" 和 "Midnight Blizzard" 都是同一个威胁行为者的别名。
+
+**实体消解（Entity Resolution）** 是判定不同记录何时指向同一实体的更宏观过程，包括相似度计算、重复检测和合并等步骤。
+
+**相似度算法：**
+- **Jaro-Winkler** 衡量字符串相似度，对共享前缀给更高的分数，适合有相同开头部分的名称
+- **Levenshtein** 距离统计把一个字符串变换成另一个所需的字符编辑次数，适合发现拼写错误和变体
+
+**聚类** 使用并查集（Union-Find）等算法把相关的重复项归到一起，确保只要 A 匹配 B、B 匹配 C，三者就会被归为一组，即使 A 和 C 并不直接匹配。
+
+## 为什么使用去重？
+
+**数据质量与一致性。** 消除重复节点——它们会割裂关系，并让同一实体的不同名称产生不一致的查询结果。
+
+**准确的分析与指标。** 当实体不再因命名差异而被人为拆分到多个节点上时，计数、中心性指标和关系分析才能得到正确结果。
+
+**关系整合。** 把分散的关系合并到单一规范实体上，从而完整分析连接与模式——碎片化数据会漏掉这些。
+
+**数据源整合。** 无缝组合来自多个订阅源、系统和数据库的数据——在这些地方，同样的实体以不同的标识符和命名约定出现。
+
+**图谱效率。** 通过恰当的合并策略，在消除冗余节点、缩小图规模、提升查询性能的同时保留全部信息。
+
+**溯源（Provenance）保留。** 维护完整的审计追踪，显示最终规范实体的每一条信息来自哪个数据源。
+
+## 何时使用 / 何时不用
+
+**在以下情况下使用去重：**
+- 实体以不同名称或标识符出现的多源数据集成
+- 易于出现别名和变体的实体类型（组织、人员、产品、地理位置）
+- 关系准确性依赖实体整合的知识图谱
+- 需要规范实体管理的数据质量工作流
+- 需要准确实体计数和关系指标的分析
+- 同一现实世界对象出现在多个系统或数据库中的场景
+
+**在以下情况下不要使用去重：**
+- 实体标识符和命名约定一致的单源数据
+- 去重延迟不可接受的高吞吐流式场景
+- 拥有可靠主键、在设计上不可能出现重复的数据
+- 需要把实体变体保留为独立节点的情况（不同的产品版本、基于时间的实体状态）
+- 基本数据库约束即可处理唯一性的简单精确匹配场景
+
+**需谨慎使用：**
+- O(n²) 成对比较计算开销高昂的大型数据集
+- 已有确定性主键（LEI、CVE-ID、ISIN）时仍做模糊匹配
+- 可能合并掉真正不同实体的过低相似度阈值
+
+## 典型工作流
+
+去重工作流遵循一条从检测到合并的系统化流程：
+
+**1. 检测** → 使用 `detect_duplicates()` 或 `DuplicateDetector`，通过多因子相似度评分识别潜在匹配
+
+**2. 分组** → 应用聚类算法，把传递相关的重复项收集成组（A 匹配 B，B 匹配 C → 归为一组 A、B、C）
+
+**3. 选定规范实体** → 依据完整性、数据源权威性或置信度分数，为每组选出代表实体
+
+**4. 合并** → 使用 `keep_most_complete` 或 `merge_all` 等策略合并重复实体，同时保留溯源
+
+**5. 校验** → 审查合并结果，并依据精确率/召回率分析调整阈值或策略
+
+**6. 更新图谱** → 用规范实体替换重复节点，并迁移所有关系
+
+这条流水线把碎片化的多源数据转化为干净、整合的知识图谱，可直接用于分析和推理。
+
+## API 模式：函数式与类
+
+Semantica 为不同使用场景同时提供了简单的函数式封装和完整的类 API：
+
+**面向简单工作流的函数式封装：**
+- `detect_duplicates()`——以最少配置完成一次性重复检测
+- `calculate_similarity()`——比较两个实体并给出详细的相似度分解
+- `merge_entities()`——merge_duplicates() 的便捷封装，用于快速合并
+
+**面向复杂工作流的类 API：**
+- `DuplicateDetector`——可配置的重复检测，支持聚类、增量处理和高级相似度选项
+- `EntityMerger`——精细的合并能力，支持多种策略、溯源追踪和合并历史
+
+**使用准则：**
+- 当你手上是一批原始实体、需要自动检测重复时，使用 `merge_duplicates()`
+- 当你已确定哪些实体是重复项、只需合并一个预先确定的组时，使用 `merge_entity_group()`
+- 不要在同一工作流中混用函数式封装与类 API——选定一种方式并贯彻到底
+
+去重模块使用六种互补的相似度算法——精确匹配、Levenshtein、Jaro-Winkler、余弦、属性比较和向量嵌入（Embedding）——跨多源知识图谱检测重复实体，然后将它们合并为单一的规范实体，同时保留完整溯源。在运行图分析或冲突解决之前，先用它收敛别名簇（例如 "APT29"、"Cozy Bear"、"Midnight Blizzard"）。
+
+<Info>
+在摄取之后、冲突解决之前运行去重。去重把重复节点收敛为一个规范实体。冲突解决随后再调和该规范实体上相互矛盾的属性值。流水线顺序很重要：先去重，再解决冲突，最后用 SHACL 校验。
+</Info>
+
+## 找到你的重复项：首次扫描
+
+在较小的数据集上，用 `detect_duplicates()` 进行直接的重复检测。把它指向你的实体，让成对比较算法用多种相似度信号比较每一对。
+
+**扩展性考量：** 对于几千个节点的数据集，几秒钟即可跑完。O(n²) 的成对比较成本只有在一万个实体以上才会成为问题——更大的集合请参考下文的聚类章节。
+
+```python
+from semantica.deduplication import detect_duplicates
+
+# Threat actors ingested from four different CTI feeds — same actors, different names
+threat_actors = [
+    {"id": "ta-nvd-001",  "name": "APT29",            "type": "ThreatActor",
+     "country": "Russia",  "source": "MISP"},
+    {"id": "ta-of-002",   "name": "APT-29",            "type": "ThreatActor",
+     "country": "Russia",  "source": "OpenCTI"},
+    {"id": "ta-rf-003",   "name": "Cozy Bear",         "type": "ThreatActor",
+     "aliases": ["APT29"], "country": "Russia", "source": "RecordedFuture"},
+    {"id": "ta-sx-004",   "name": "The Dukes",         "type": "ThreatActor",
+     "aliases": ["APT29", "Cozy Bear"], "country": "Russia", "source": "STIX-partner"},
+    {"id": "ta-ms-005",   "name": "Midnight Blizzard", "type": "ThreatActor",
+     "aliases": ["NOBELIUM", "APT29"], "country": "Russia", "source": "Microsoft"},
+    {"id": "ta-ap-006",   "name": "APT28",             "type": "ThreatActor",
+     "country": "Russia",  "source": "MISP"},  # different actor — should NOT match
+]
+
+candidates = detect_duplicates(
+    threat_actors,
+    method="pairwise",          # compare every pair
+    similarity_threshold=0.6,   # minimum score to flag as a candidate
+    confidence_threshold=0.5,   # minimum confidence in the match
+)
+
+for c in candidates:
+    print(f"{c.entity1['name']!r}  ~  {c.entity2['name']!r}")
+    print(f"  similarity={c.similarity_score:.2f}  confidence={c.confidence:.2f}")
+    print(f"  signals: {c.reasons}")
+    print()
+```
+
+```text
+'APT29'  ~  'APT-29'
+  similarity=0.89  confidence=0.81
+  signals: ['levenshtein', 'jaro_winkler']
+
+'APT29'  ~  'Cozy Bear'
+  similarity=0.63  confidence=0.71
+  signals: ['property', 'relationship']   # alias field matched
+
+'Cozy Bear'  ~  'The Dukes'
+  similarity=0.61  confidence=0.68
+  signals: ['property']                   # shared alias "APT29"
+
+'APT29'  ~  'Midnight Blizzard'
+  similarity=0.65  confidence=0.73
+  signals: ['property']                   # alias "APT29" in Midnight Blizzard record
+```
+
+这些分数讲得很清楚。"APT29" 与 "APT-29" 得分 0.89——唯一差别是连字符，产生了很强的字符串相似度信号。"Cozy Bear" 与 "The Dukes" 得分较低（0.61），因为名称完全不同，但属性信号被触发，因为两条记录的别名列表里都带有 `"APT29"`。"APT28" 从未出现在结果中，因为它只共享 country 字段——不足以跨过 0.6 阈值。
+
+## 理解候选对象
+
+每个 `DuplicateCandidate` 都携带两个实体、它们的相似度得分，以及哪些相似度算法对匹配做出了贡献的详细分解。这为审计和阈值调优提供了完全的透明度：
+
+```python
+from semantica.deduplication import calculate_similarity
+
+# Inspect a single pair in detail before committing to a merge
+e1 = threat_actors[0]   # APT29
+e2 = threat_actors[2]   # Cozy Bear
+
+result = calculate_similarity(e1, e2, method="multi_factor")
+
+print(f"Overall score : {result.score:.2f}")
+print(f"Method        : {result.method}")
+print(f"Components    :")
+for algo, score in result.components.items():
+    print(f"  {algo:<20} {score:.2f}")
+```
+
+```text
+Overall score : 0.63
+Method        : multi_factor
+Components    :
+  exact                0.00   # names are completely different strings
+  levenshtein          0.12   # high edit distance between "APT29" and "Cozy Bear"
+  jaro_winkler         0.21   # no shared prefix
+  property             0.94   # alias match is nearly definitive
+  relationship         0.71   # share relationships to overlapping malware families
+  embedding            0.78   # semantic vectors land in the same cluster
+```
+
+属性分量（0.94）在这里贡献了大部分权重。"Cozy Bear" 的记录带有 `aliases: ["APT29"]`，这几乎确凿地表明这些实体指的是同一个威胁行为者。当你看到这种模式——名称相似度弱但属性匹配强——你面对的通常是一个真实的别名关系，而不是假阳性。
+
+## 合并前先为重复项分组
+
+对于小数据集，你可以直接合并候选对。对于同一个实体可能以六个不同名字出现在十二个订阅源中的较大图谱，请使用带并查集（Union-Find）聚类的重复分组。这样即使 A 与 C 不直接满足相似度阈值，只要 A 匹配 B、B 匹配 C，三个实体也会被归入同一组：
+
+```python
+from semantica.deduplication import DuplicateDetector, EntityMerger
+
+detector = DuplicateDetector(
+    similarity_threshold=0.6,
+    confidence_threshold=0.5,
+    use_clustering=True,      # enable Union-Find grouping
+)
+
+groups = detector.detect_duplicate_groups(threat_actors)
+
+print(f"Found {len(groups)} duplicate groups:")
+for group in groups:
+    names = [e["name"] for e in group.entities]
+    print(f"  Group (confidence={group.confidence:.2f}): {names}")
+    if group.representative:
+        print(f"  Representative: {group.representative['name']!r}")
+```
+
+```text
+Found 2 duplicate groups:
+  Group (confidence=0.74): ['APT29', 'APT-29', 'Cozy Bear', 'The Dukes', 'Midnight Blizzard']
+  Representative: 'APT29'   # highest completeness score in the group
+
+  Group (confidence=0.81): ['APT28', 'Fancy Bear']
+  Representative: 'APT28'
+```
+
+分组结果把整合过程呈现得很清楚：五个本应成为单一规范实体的独立节点。`representative` 字段标出合并器将用作基础的那个实体——通常是属性集最完整的那个，在这里就是来自 MISP 订阅源的 "APT29"。
+
+## 合并：收敛分组而不丢失数据
+
+识别出重复组之后，合并过程会把它们整合为规范实体。`keep_most_complete` 策略选取属性数量最多的实体作为规范节点，并用其他来源中缺失的字段充实它：
+
+```python
+merger = EntityMerger(preserve_provenance=True)
+
+for group in groups:
+    if len(group.entities) < 2:
+        continue
+
+    # merge_entity_group() skips duplicate detection since `group.entities`
+    # is already a confirmed group from detect_duplicate_groups()
+    op = merger.merge_entity_group(group.entities, strategy="keep_most_complete")
+
+    canonical = op.merged_entity
+    source_ids = [e["id"] for e in op.source_entities]
+    print(f"Merged {len(op.source_entities)} entities → canonical: {canonical['name']!r}")
+    print(f"  Source IDs retired : {source_ids}")
+    print(f"  Merge strategy     : {op.merge_result.metadata.get('strategy')}")
+```
+
+```text
+Merged 5 entities → canonical: 'APT29'
+  Source IDs retired : ['ta-nvd-001', 'ta-of-002', 'ta-rf-003', 'ta-sx-004', 'ta-ms-005']
+  Merge strategy     : keep_most_complete
+```
+
+五个源实体被一个规范表示所取代。那五个节点携带的每一条关系——指向攻击活动、恶意软件家族、TTP、基础设施——现在都挂到规范节点 "APT29" 上。合并操作在消除冗余的同时保留了全部信息，溯源记录则准确显示每个属性来自哪个订阅源。
+
+## 审查合并历史以备审计
+
+批量合并操作之后，你可以取回完整的历史来审查每一个决策。这条审计追踪对于理解合并决策、并向利益相关方解释这些决策至关重要：
+
+```python
+history = merger.get_merge_history()
+
+print(f"Total merge operations: {len(history)}")
+for op in history:
+    print(f"  {op.merged_entity['name']!r} ← {len(op.source_entities)} sources")
+    print(f"    strategy: {op.merge_result.metadata.get('strategy')}")
+```
+
+这份历史对合并决策提供了完全的透明度。当某个订阅源的负责人问起他的实体为什么被并进另一个实体时，你有成文的证据和决策理由可以出示。
+
+## 流式摄取：增量去重
+
+当你的流水线处理连续数据流——新的威胁情报每小时到达——你不会想在每个批次上都对整个图重跑成对比较。使用增量检测，只把新实体与既有规范集合做比较：
+
+```python
+# Existing graph entities (already deduplicated)
+existing_actors = [
+    {"id": "ta-nvd-001", "name": "APT29", "type": "ThreatActor", "country": "Russia"},
+]
+
+# New batch arriving from a fresh feed
+new_batch = [
+    {"id": "ta-new-007", "name": "NOBELIUM",      "type": "ThreatActor",
+     "aliases": ["APT29"], "country": "Russia", "source": "MSTIC-2026-06"},
+    {"id": "ta-new-008", "name": "Scattered Spider", "type": "ThreatActor",
+     "country": "Unknown",  "source": "CrowdStrike"},
+]
+
+incremental = detector.incremental_detect(new_batch, existing_actors)
+
+print(f"New duplicates found in this batch: {len(incremental)}")
+for c in incremental:
+    print(f"  {c.entity1['name']!r} matches existing {c.entity2['name']!r}")
+    print(f"  score={c.similarity_score:.2f}")
+```
+
+```text
+New duplicates found in this batch: 1
+  'NOBELIUM' matches existing 'APT29'
+  score=0.67        # alias field carries "APT29" — property signal fires
+```
+
+NOBELIUM 进入队列，将与既有的 APT29 规范实体合并。Scattered Spider 对每个既有行为者的得分都低于阈值，因此作为一个新的、唯一的节点加入图中。
+
+## 扩展到大规模实体集
+
+对于节点数超过一万的图，成对比较因 O(n²) 复杂度而在计算上变得昂贵。使用 `build_clusters()` 运行更高效的向量化批量比较，然后合并得到的每个簇：
+
+**性能警告：** 务必在有代表性的数据规模上对相似度操作做性能剖析。对 1000 个实体可行的做法，若无适当的扩展策略，在 10000+ 个实体时可能慢得不可接受。
+
+```python
+from semantica.deduplication import build_clusters
+
+# Ten thousand CVE entities from NVD, Vulhub, and vendor feeds
+# (not shown — assume `all_vulns` is a list of 10k+ dicts)
+
+cluster_result = build_clusters(
+    all_vulns,
+    method="graph_based",        # Union-Find over similarity graph
+    similarity_threshold=0.75,
+)
+
+print(f"Clusters found   : {len(cluster_result.clusters)}")
+print(f"Unclustered      : {len(cluster_result.unclustered)}")
+print(f"Quality metrics  : {cluster_result.quality_metrics}")
+
+# Merge each cluster
+merger = EntityMerger(preserve_provenance=True)
+for cluster in cluster_result.clusters:
+    if len(cluster.entities) > 1:
+        # Use merge_entity_group() since clustering already determined these are duplicates
+        merger.merge_entity_group(cluster.entities, strategy="keep_most_complete")
+```
+
+对于更大的集合，改用 `method="hierarchical"`，它采用凝聚式自底向上聚类，可以扩展到数十万实体，但要以一定的精确率为代价。
+
+## 一个简单的例子：客户去重
+
+在进入领域专属案例之前，先走一遍一个直接的客户去重场景。某公司的 CRM 系统积累了来自网页注册、销售团队录入和支持工单的重复客户记录：
+
+```python
+from semantica.deduplication import detect_duplicates, merge_entities
+
+customers = [
+    {"id": "cust-001", "name": "John Smith", "email": "john.smith@email.com", 
+     "company": "Acme Corp", "source": "web_signup"},
+    {"id": "cust-002", "name": "J. Smith", "email": "john.smith@email.com",
+     "company": "Acme Corporation", "source": "sales_team"},
+    {"id": "cust-003", "name": "John Smith", "phone": "+1-555-0123",
+     "company": "Acme Corp", "source": "support_ticket"},
+    {"id": "cust-004", "name": "Jane Doe", "email": "jane.doe@email.com",
+     "company": "Beta Inc", "source": "web_signup"},
+]
+
+# Step 1: Find potential duplicates
+candidates = detect_duplicates(
+    customers,
+    method="pairwise",
+    similarity_threshold=0.6,  # 60% similarity required
+    confidence_threshold=0.5,
+)
+
+print("Potential duplicates found:")
+for c in candidates:
+    print(f"  {c.entity1['name']} ~ {c.entity2['name']} (score: {c.similarity_score:.2f})")
+    print(f"    Matching signals: {c.reasons}")
+
+# Expected output:
+# John Smith ~ J. Smith (score: 0.82)
+#   Matching signals: ['exact', 'property']  # same email
+# John Smith ~ John Smith (score: 0.78)  
+#   Matching signals: ['exact', 'property']  # same name and company
+
+# Step 2: Merge the duplicates
+john_smith_records = [customers[0], customers[1], customers[2]]  # All John Smith variants
+merged_ops = merge_entities(john_smith_records, method="keep_most_complete")
+
+for op in merged_ops:
+    canonical = op.merged_entity
+    print(f"\nCanonical customer: {canonical['name']}")
+    print(f"  Email: {canonical.get('email', 'N/A')}")
+    print(f"  Phone: {canonical.get('phone', 'N/A')}")
+    print(f"  Company: {canonical['company']}")
+    print(f"  Merged from {len(op.source_entities)} records")
+    
+# Result: One John Smith record with email, phone, and company information
+# from all three original records, with full provenance tracking
+```
+
+这个例子展示了核心概念：相似度检测找出相关记录，合并则把它们整合为保留全部可用信息的规范实体。
+
+## 常见陷阱
+
+**未经校验就调整阈值。** 阈值设置过低会在真正不同的实体之间产生假阳性合并。在运行大规模合并操作之前，务必人工抽查一部分检测到的重复项。
+
+**成对比较的扩展性问题。** 比较每一对实体的 O(n²) 成本在超过 10000 个实体后会变得难以承受。对大型数据集，请使用聚类方法（`build_clusters`）或改用向量化相似度。
+
+**存在主键时仍使用模糊匹配。** 如果你的实体有可靠唯一标识符（LEI 编码、CVE 编号、ISBN 号），请在这些字段上用精确匹配，而不是计算昂贵的相似度算法。
+
+**混用封装与类 API、前后不一。** 不要调用 `detect_duplicates()` 之后再手动实例化 `EntityMerger`——要么全用函数式，要么全用类式，并在整个工作流中保持一致。
+
+**忽视合并策略的影响。** `keep_first` 会完全覆盖较晚的记录，`merge_all` 可能引入相互冲突的值，而 `keep_most_complete` 可能不尊重数据源权威性。请选择与你的数据质量要求相匹配的策略。
+
+**跳过溯源追踪。** 没有 `preserve_provenance=True`，你就无法看清规范实体中的每个字段来自哪个来源，审计追踪也就无从谈起。
+
+**相似度算法选得不当。** 纯字符串相似度对别名关系无能为力（"APT29" 对 "Cozy Bear"），而属性匹配对于共享属性但身份不同的实体可能过于激进。
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防——CTI/威胁">
+
+一个威胁情报平台从 Mandiant、CrowdStrike、MITRE ATT&CK 以及合作 ISAC 订阅源摄取行为者档案。同一批行为者以各厂商自己的名字出现："Cozy Bear"（CrowdStrike）、"APT29"（MITRE）、"Midnight Blizzard"（Microsoft）、"The Dukes"（F-Secure）。在任何分析师查询运行之前，这些别名必须收敛为单一规范节点，让关系——使用过的恶意软件、运营过的基础设施、归因过的攻击活动——全部挂到同一处。
+
+别名字段是这里的关键信号。只要任何记录在其 `aliases` 列表中带有规范名称，基于属性的相似度就会强烈触发。设置一个适中的阈值（0.6）可以捕捉到仅靠名称相似度会漏掉的、基于别名的匹配。
+
+```python
+from semantica.deduplication import DuplicateDetector, EntityMerger
+
+actors = [
+    {"id": "ta-cs-001",  "name": "Cozy Bear",         "type": "ThreatActor",
+     "aliases": ["APT29", "The Dukes"],  "country": "Russia", "source": "CrowdStrike"},
+    {"id": "ta-mt-002",  "name": "APT29",              "type": "ThreatActor",
+     "aliases": [],                       "country": "Russia", "source": "MITRE"},
+    {"id": "ta-ms-003",  "name": "Midnight Blizzard",  "type": "ThreatActor",
+     "aliases": ["NOBELIUM", "APT29"],   "country": "Russia", "source": "Microsoft"},
+    {"id": "ta-fs-004",  "name": "The Dukes",          "type": "ThreatActor",
+     "aliases": ["APT29", "Cozy Bear"],  "country": "Russia", "source": "F-Secure"},
+    {"id": "ta-mt-005",  "name": "APT28",              "type": "ThreatActor",
+     "aliases": ["Fancy Bear"],           "country": "Russia", "source": "MITRE"},
+]
+
+detector = DuplicateDetector(similarity_threshold=0.6, confidence_threshold=0.5)
+groups = detector.detect_duplicate_groups(actors)
+
+merger = EntityMerger(preserve_provenance=True)
+for group in groups:
+    if len(group.entities) < 2:
+        continue
+    ops = merger.merge_duplicates(group.entities, strategy="keep_most_complete")
+    for op in ops:
+        feeds = [e["source"] for e in op.source_entities]
+        print(f"Canonical: {op.merged_entity['name']!r}  (merged from: {feeds})")
+        # Canonical: 'APT29'  (merged from: ['CrowdStrike', 'MITRE', 'Microsoft', 'F-Secure'])
+        # All four actor nodes collapse to one — every relationship they held now
+        # attaches to the canonical APT29 node.
+```
+
+</Tab>
+
+<Tab title="安全——SOC/事件">
+
+一个 SOC 漏洞管理数据库从 NVD、Vulhub、CISA KEV 和厂商公告摄取 CVE。同一个 CVE 常常以不同面目到达：NVD 的 "CVE-2024-3400"、Tenable 插件的 "PAN-OS GlobalProtect RCE"、博客聚合源的 "Critical PAN-OS 0day"。仅靠名称相似度匹配不上它们——`cve_id` 字段中的 CVE 编号才是决定性信号。
+
+```python
+from semantica.deduplication import detect_duplicates, merge_entities
+
+vulns = [
+    {"id": "v-nvd-001",  "name": "CVE-2024-3400",
+     "description": "PAN-OS GlobalProtect command injection RCE",
+     "cvss": 10.0, "source": "NVD",      "type": "Vulnerability"},
+    {"id": "v-cisa-002", "name": "CVE-2024-3400",
+     "description": "Critical PAN-OS vulnerability in active exploitation",
+     "cvss": 10.0, "source": "CISA-KEV", "type": "Vulnerability"},
+    {"id": "v-ten-003",  "name": "PAN-OS GlobalProtect RCE",
+     "cve_id": "CVE-2024-3400",
+     "cvss": 10.0, "source": "Tenable",  "type": "Vulnerability"},
+    {"id": "v-nvd-004",  "name": "CVE-2023-44487",
+     "description": "HTTP/2 Rapid Reset DDoS amplification",
+     "cvss": 7.5,  "source": "NVD",      "type": "Vulnerability"},
+]
+
+# Low threshold because name similarity between "CVE-2024-3400" and
+# "PAN-OS GlobalProtect RCE" is near zero — we need property signals to fire
+candidates = detect_duplicates(
+    vulns,
+    method="pairwise",
+    similarity_threshold=0.5,
+    confidence_threshold=0.4,
+)
+
+for c in candidates:
+    print(f"{c.entity1['name']!r}  ~  {c.entity2['name']!r}")
+    print(f"  score={c.similarity_score:.2f}  signals={c.reasons}")
+    # 'CVE-2024-3400'  ~  'PAN-OS GlobalProtect RCE'
+    #   score=0.61  signals=['property', 'exact']   # cve_id field match
+
+# Merge the three CVE-2024-3400 variants
+cve_group = [v for v in vulns if "3400" in v["name"] or v.get("cve_id") == "CVE-2024-3400"]
+ops = merge_entities(cve_group, method="keep_most_complete", preserve_provenance=True)
+for op in ops:
+    print(f"Canonical CVE: {op.merged_entity['name']}  CVSS={op.merged_entity.get('cvss')}")
+    # Canonical CVE: CVE-2024-3400  CVSS=10.0
+    # One node now carries all three source records' provenance.
+```
+
+</Tab>
+
+<Tab title="生命科学——临床/制药">
+
+一张临床试验知识图谱从 WHO INN 清单、PubChem、商品名数据库和试验注册库摄取药物实体。华法林（Warfarin）以多种面目出现："warfarin"（INN）、"Coumadin"（商品名，Bristol-Myers Squibb）、"warfarin sodium"（PubChem 化学形式）以及 "81-81-2"（CAS 号）。CAS 号就是基准真值——只要两条记录共享同一个 CAS 号，无论叫什么名字，它们都是同一种化合物。
+
+```python
+from semantica.deduplication import DuplicateDetector, EntityMerger, calculate_similarity
+
+compounds = [
+    {"id": "c-inn-001", "name": "warfarin",         "type": "Drug",
+     "cas": "81-81-2",   "source": "WHO-INN"},
+    {"id": "c-bms-002", "name": "Coumadin",         "type": "Drug",
+     "cas": "81-81-2",   "source": "BMS-brand"},
+    {"id": "c-pc-003",  "name": "warfarin sodium",  "type": "Drug",
+     "source": "PubChem"},                            # no CAS — less complete record
+    {"id": "c-inn-004", "name": "metoprolol",       "type": "Drug",
+     "cas": "37350-58-6","source": "WHO-INN"},
+    {"id": "c-nov-005", "name": "Lopressor",        "type": "Drug",
+     "cas": "37350-58-6","source": "Novartis-brand"},
+]
+
+# The property method scores CAS number matches extremely high
+sim = calculate_similarity(compounds[0], compounds[1], method="property")
+print(f"warfarin vs Coumadin: {sim.score:.2f}")
+# warfarin vs Coumadin: 0.91  — CAS match dominates
+
+detector = DuplicateDetector(similarity_threshold=0.6, confidence_threshold=0.5)
+groups = detector.detect_duplicate_groups(compounds)
+
+merger = EntityMerger(preserve_provenance=True)
+for group in groups:
+    if len(group.entities) < 2:
+        continue
+    ops = merger.merge_duplicates(group.entities, strategy="keep_most_complete")
+    for op in ops:
+        print(f"Canonical: {op.merged_entity['name']!r}  CAS={op.merged_entity.get('cas')}")
+        print(f"  Sources: {[e['source'] for e in op.source_entities]}")
+        # Canonical: 'warfarin'  CAS=81-81-2
+        #   Sources: ['WHO-INN', 'BMS-brand', 'PubChem']
+        # All three warfarin records merge; WHO-INN record wins as most complete.
+```
+
+</Tab>
+
+<Tab title="银行业——风险/合规">
+
+一个风险管理系统在构建交易对手敞口图谱之前，先跨 CRM、KYC 和交易系统对公司客户做实体消解。法律实体标识符（Legal Entity Identifier，LEI）是决定性标识符——一个 20 字符的 ISO 17442 编码，在全球范围内唯一标识每个法人实体。只要两条记录共享同一个 LEI，无论名称如何书写，它们都是同一个法律实体。
+
+三条 BlackRock 记录——"BlackRock Inc."（CRM）、"BlackRock, Inc."（KYC，带逗号）、"Blackrock"（交易系统，小写 b）——必须在汇总信用敞口之前收敛为一个规范交易对手。属性相似度方法给 LEI 匹配打出接近 1.0 的分数，即使名称相似度中等也能处理好这种情况。
+
+```python
+from semantica.deduplication import build_clusters, EntityMerger
+
+clients = [
+    {"id": "crm-001", "name": "BlackRock Inc.",           "type": "Client",
+     "lei": "549300HLPTRASHS0E726", "source": "CRM"},
+    {"id": "kyc-001", "name": "BlackRock, Inc.",          "type": "Client",
+     "lei": "549300HLPTRASHS0E726", "source": "KYC"},
+    {"id": "trd-001", "name": "Blackrock",                "type": "Client",
+     "lei": "549300HLPTRASHS0E726", "source": "TradeOps"},
+    {"id": "crm-002", "name": "Vanguard Group",           "type": "Client",
+     "lei": "549300IH7BVXP9VN3J07", "source": "CRM"},
+    {"id": "kyc-002", "name": "The Vanguard Group, Inc.", "type": "Client",
+     "lei": "549300IH7BVXP9VN3J07", "source": "KYC"},
+]
+
+cluster_result = build_clusters(
+    clients,
+    method="graph_based",
+    similarity_threshold=0.65,   # LEI match alone scores above this
+)
+
+merger = EntityMerger(preserve_provenance=True)
+for cluster in cluster_result.clusters:
+    if len(cluster.entities) < 2:
+        continue
+    ops = merger.merge_duplicates(cluster.entities, strategy="keep_most_complete")
+    for op in ops:
+        sources = [e["source"] for e in op.source_entities]
+        print(f"Canonical: {op.merged_entity['name']!r}  (from {sources})")
+        # Canonical: 'BlackRock Inc.'  (from ['CRM', 'KYC', 'TradeOps'])
+        # Canonical: 'Vanguard Group'  (from ['CRM', 'KYC'])
+
+print(f"\nBefore: {len(clients)} client records")
+print(f"After : {len(cluster_result.clusters)} canonical counterparties")
+print(f"Quality: {cluster_result.quality_metrics}")
+```
+
+</Tab>
+
+</Tabs>
+
+## 选择合适的阈值
+
+相似度阈值控制敏感度。从 0.7 起步，先检查假阳性再作调整：
+
+- **0.95 及以上**——仅限近乎完全一致的字符串匹配。用于各订阅源之间名称格式一致的编码和标识符（LEI、CAS、CVE-ID）。
+- **0.80–0.95**——捕捉排版变体："Apple Inc." 对 "Apple, Inc."、"BlackRock" 对 "BlackRock Inc."。
+- **0.65–0.80**——捕捉缩写和简称。对于在各订阅源中以全称和简称两种形式出现的组织名称必不可少。
+- **0.50–0.65**——语义相似度的领地。需要属性或嵌入信号来弥补名称相似度的不足。当名称可能是完全不同的字符串却指向同一实体时，基于别名的匹配请使用这个区间。
+
+## 选择合并策略
+
+| 策略 | 适用时机 |
+| :--- | :--- |
+| `keep_most_complete` | 你没有指定的权威数据源；最大化信息密度。默认之选。 |
+| `keep_first` | 你的第一个数据源是黄金记录系统（MDM、LEI 注册库），其数据绝不能被覆盖。 |
+| `keep_highest_confidence` | 你的实体带有显式的置信度分数，并且你信任它作为质量信号。 |
+| `merge_all` | 你想要所有属性的并集；当你随后会运行冲突解决来调和分歧时可以接受。 |
+
+## 相关指南
+
+- [摄取一切](ingest)——多源摄取产生了本模块要解决的重复项
+- [上下文图谱](context-graphs)——把去重后的实体直接存入知识图谱
+- [冲突解决](conflict-resolution)——合并之后，调和规范实体上相互矛盾的属性值
+- [溯源](provenance)——追踪合并血缘，让每个规范实体都能回溯到其原始来源
+- [Pipeline](pipeline)——把摄取、去重和存储串成 `PipelineBuilder` 工作流

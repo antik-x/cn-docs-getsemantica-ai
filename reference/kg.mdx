@@ -1,0 +1,489 @@
+---
+title: "Knowledge Graph 模块"
+description: "图谱构建、时序模型、分析、相似度评分与结构嵌入。"
+icon: "diagram-project"
+---
+
+`semantica.kg` 把抽取出的实体和关系转化为结构化、可查询的知识图谱（Knowledge Graph）：
+
+- 带 `valid_from` / `valid_until` 窗口的时序节点和边，覆盖全部 13 种 Allen 区间关系
+- 完整的图分析套件：中心性、社区检测、路径查找、链接预测
+- 面向下游机器学习与相似度评分的 Node2Vec 结构嵌入（Embedding）
+- OWL-Time 导出，以及通过 `TemporalVersionManager` 实现的版本化快照
+- 持久化之前的 Schema 与约束校验
+
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `KnowledgeGraph` | 核心图数据结构：节点、边、属性与时序有效性 |
+| `GraphBuilder` | 从实体 + 关系构建图谱；传入 `merge_entities=True` 启用去重 |
+| `GraphBuilderWithProvenance` | 在 `GraphBuilder` 之上封装可选的溯源（Provenance）追踪；传入 `provenance=True` 启用 |
+| `EntityResolver` | 图谱构建期间的实体去重与合并 |
+| `GraphAnalyzer` | 统一的分析封装：一次调用运行中心性、社区检测与连通性分析 |
+| `ConnectivityAnalyzer` | 连通分量检测、桥识别、密度与度统计 |
+| `TemporalGraphQuery` | 时点快照、范围查询、演化分析与时序路径查找 |
+| `TemporalPatternDetector` | 在时序边上检测序列与循环模式 |
+| `TemporalReasoningEngine` | 作用于 `TemporalInterval` 对象的全部 13 种 Allen 区间代数关系 |
+| `TemporalInterval` | 不可变数据类 `(start: datetime, end: datetime \| TemporalBound, label?)` |
+| `IntervalRelation` | 全部 13 种 Allen 关系标签的枚举（`BEFORE`、`AFTER`、`MEETS` 等） |
+| `BiTemporalFact` | 封装 `valid_from`、`valid_until`、`recorded_at`、`superseded_at` 的数据类。工厂方法：`BiTemporalFact.from_relationship(rel_dict)` |
+| `TemporalBound` | 表示开放区间的哨兵枚举——唯一取值：`TemporalBound.OPEN` |
+| `TemporalNormalizer` | 把自然语言时序表达式解析为 `(datetime, datetime)` 元组——零大语言模型（LLM）调用 |
+| `TemporalQueryRewriter` | 从自由文本查询中提取时序意图；返回 `TemporalQueryResult` |
+| `TemporalQueryResult` | `TemporalQueryRewriter.rewrite()` 的数据类输出 |
+| `TemporalVersionManager` | 带 SHA-256 完整性校验的版本化快照，基于 SQLite 的持久化存储 |
+| `CentralityCalculator` | PageRank、度、介数、接近度、特征向量中心性 |
+| `CommunityDetector` | Louvain、Leiden、标签传播与 K-派系社区检测 |
+| `PathFinder` | Dijkstra、A*、BFS 与 K-最短路径算法 |
+| `LinkPredictor` | 优先连接、Jaccard、Adamic-Adar 链接预测 |
+| `NodeEmbedder` | 面向下游机器学习的 Node2Vec 结构嵌入 |
+| `SimilarityCalculator` | 余弦、欧几里得、曼哈顿与相关性相似度评分 |
+| `GraphValidator` | 持久化之前的 Schema 与约束校验 |
+| `AlgorithmTrackerWithProvenance` | 带溯源元数据的算法执行追踪 |
+| `AlgorithmRegistry` / `algorithm_registry` | 已注册算法的注册表；`algorithm_registry` 是共享单例 |
+| `ProvenanceTracker` | 图操作的 W3C PROV-O 溯源追踪 |
+| `SeedManager` | 跨算法的可复现随机种子管理 |
+| `KGConfig` / `kg_config` | 模块级配置；`kg_config` 是共享单例 |
+
+
+<Tip>
+  如需冲突检测与高级实体消解，请在本模块之外配合使用 `semantica.conflicts` 和 `semantica.deduplication`。
+</Tip>
+
+<img src="/assets/img/diagrams/kg-structure.svg" alt="知识图谱的实体与关系结构：Person、Organization、Location、Date 节点及带类型的标注边" style={{ width: '100%', borderRadius: '12px', margin: '0 0 24px' }} />
+
+## GraphBuilder
+
+**`GraphBuilder`** 从抽取出的实体和关系构建知识图谱。`merge_entities` 默认为 `False`：传入 **`True`** 即可在构建过程中启用实体去重：
+
+```python
+from semantica.kg import GraphBuilder
+
+# Pass a dict with "entities" and "relationships" keys
+builder = GraphBuilder(merge_entities=True)
+kg = builder.build({"entities": entities, "relationships": relationships})
+```
+
+| 方法 | 返回值 | 描述 |
+| :------ | :------- | :----------- |
+| `build(sources)` | `dict` | 从字典、字典列表或实体/关系对象列表构建图谱 |
+| `build_single_source(data)` | `dict` | 从单个数据源字典构建图谱 |
+
+
+## 时序知识图谱（v0.4.0+）
+
+<Info>
+  完整的时序参考——包括 `BiTemporalFact`、`TemporalReasoningEngine`、Allen 区间代数与 `TemporalNormalizer`——收录在专门的[时序智能](temporal)页面中。本节只记录 KG 层的时序 API。
+</Info>
+
+时序技术栈——完整参考请见[时序智能](temporal)页面。
+
+### 构建时序图谱
+
+```python
+from semantica.kg import GraphBuilder, TemporalGraphQuery, TemporalVersionManager
+
+builder = GraphBuilder()
+kg = builder.build(sources=[
+    {
+        "entities": [
+            {"id": "alice",     "type": "Person"},
+            {"id": "acme_corp", "type": "Organization"},
+            {"id": "beta_ltd",  "type": "Organization"},
+        ],
+        "relationships": [
+            {
+                "source": "alice", "target": "acme_corp", "type": "ceo_of",
+                "valid_from":  "2018-01-01",
+                "valid_until": "2022-06-01",
+            },
+            {
+                "source": "alice", "target": "beta_ltd", "type": "ceo_of",
+                "valid_from":  "2022-06-01",
+                # No valid_until → open-ended (TemporalBound.OPEN)
+            },
+        ],
+    }
+])
+```
+
+### 时点查询
+
+`TemporalGraphQuery` 接受可选的构造函数参数；把图谱传入每次查询调用：
+
+```python
+from semantica.kg import TemporalGraphQuery
+
+query = TemporalGraphQuery(
+    temporal_granularity="day",        # second|minute|hour|day|week|month|year
+    enable_temporal_reasoning=True,
+)
+
+# Primary API: query_at_time returns counts + filtered data
+result_2020 = query.query_at_time(kg, "", at_time="2020-06-15")
+result_2023 = query.query_at_time(kg, "", at_time="2023-01-01")
+print(f"Rels in 2020: {result_2020['num_relationships']}")
+
+# Low-level: reconstruct_at_time returns a deep-copied subgraph dict
+snapshot = query.reconstruct_at_time(kg, "2020-06-15")
+
+# Range query: all relationships active during any part of 2021
+range_result = query.query_time_range(kg, "", "2021-01-01", "2021-12-31")
+
+# Compare two snapshots: use TemporalVersionManager.compare_versions()
+# (temporal_diff() does not exist — see TemporalVersionManager below)
+```
+
+### 双时态事实
+
+`BiTemporalFact` 是一个**数据类**——请使用 `from_relationship()` 工厂方法，而不是位置参数构造函数：
+
+```python
+from semantica.kg import BiTemporalFact, TemporalBound
+
+rel = {
+    "source": "alice", "target": "acme_corp", "type": "ceo_of",
+    "valid_from":    "2018-01-01",
+    "valid_until":   "2022-06-01",
+    "recorded_at":   "2018-01-05T09:32:00Z",
+    "superseded_at": None,   # None → TemporalBound.OPEN (still current)
+}
+fact = BiTemporalFact.from_relationship(rel)
+
+print(fact.valid_from)      # datetime(2018, 1, 1, tzinfo=utc)
+print(fact.valid_until)     # datetime(2022, 6, 1, tzinfo=utc)
+print(fact.superseded_at)   # TemporalBound.OPEN
+
+# Open-ended fact (no valid_until → TemporalBound.OPEN)
+open_rel = {"source": "alice", "target": "beta_ltd", "type": "ceo_of",
+            "valid_from": "2022-06-01"}
+open_fact = BiTemporalFact.from_relationship(open_rel)
+print(open_fact.valid_until)   # TemporalBound.OPEN
+
+# Serialize back to dict fields for storage
+fields = fact.to_relationship_fields()
+```
+
+### Allen 区间代数
+
+`TemporalReasoningEngine` 以确定性的方式实现**全部 13 种 Allen 关系**——不用 LLM，不涉及概率。它作用于 `TemporalInterval` 对象（而非普通字典）：
+
+```python
+from semantica.kg import (
+    TemporalReasoningEngine, TemporalInterval, IntervalRelation
+)
+from datetime import datetime, timezone
+
+def dt(y, m, d): return datetime(y, m, d, tzinfo=timezone.utc)
+
+engine = TemporalReasoningEngine()
+
+h1_2020 = TemporalInterval(start=dt(2020, 1, 1), end=dt(2020, 6, 30))
+q2_q4   = TemporalInterval(start=dt(2020, 4, 1), end=dt(2020, 12, 31))
+
+relation = engine.relation(h1_2020, q2_q4)   # primary method
+print(relation)          # IntervalRelation.OVERLAPS
+print(relation.value)    # "overlaps"
+
+print(engine.overlaps(h1_2020, q2_q4))  # True
+print(engine.contains(q2_q4, h1_2020))  # False
+print(engine.active_at(h1_2020, dt(2020, 3, 15)))  # True
+```
+
+| `IntervalRelation` | `.value` | 描述 |
+| :--- | :--- | :--- |
+| `BEFORE` | `"before"` | A 严格在 B 开始之前结束 |
+| `MEETS` | `"meets"` | A 恰好在 B 开始时结束 |
+| `OVERLAPS` | `"overlaps"` | A 与 B 共享一段时期；A 先开始也先结束 |
+| `STARTS` | `"starts"` | 开始时间相同；A 比 B 先结束 |
+| `DURING` | `"during"` | A 完全位于 B 之内 |
+| `FINISHES` | `"finishes"` | 结束时间相同；B 开始更早 |
+| `EQUALS` | `"equals"` | 完全相同的区间 |
+| `AFTER`, `MET_BY`, `OVERLAPPED_BY`, `STARTED_BY`, `CONTAINS`, `FINISHED_BY` | *(逆关系)* | 镜像关系 |
+
+### 自然语言时序解析
+
+```python
+from semantica.kg import TemporalNormalizer, TemporalQueryRewriter
+from datetime import datetime, timezone
+
+# reference_date set at construction time (required for relative phrases)
+norm = TemporalNormalizer(reference_date=datetime(2024, 6, 15, tzinfo=timezone.utc))
+
+# Returns Optional[Tuple[datetime, datetime]] — not a dict
+result = norm.normalize("last quarter")
+start, end = result
+print(start)   # datetime(2024, 1, 1, tzinfo=utc)
+print(end)     # datetime(2024, 3, 31, tzinfo=utc)
+
+result = norm.normalize("2022")
+# (datetime(2022, 1, 1, tzinfo=utc), datetime(2022, 12, 31, tzinfo=utc))
+
+result = norm.normalize("unparseable phrase")
+print(result)  # None
+
+# TemporalQueryRewriter: primary method is rewrite(), returns TemporalQueryResult
+rewriter = TemporalQueryRewriter()
+result = rewriter.rewrite("Who was CEO before the 2022 restructuring?")
+print(result.temporal_intent)    # "before"
+print(result.at_time.year)       # 2022
+print(result.rewritten_query)    # "Who was CEO"
+print(result.confidence)         # 0.85
+print(result.has_temporal_context())  # True
+```
+
+### 版本化快照
+
+```python
+from semantica.kg import TemporalVersionManager
+
+# In-memory (default); pass storage_path="versions.db" for SQLite persistence
+versioner = TemporalVersionManager()
+
+# author and description are required for create_snapshot
+versioner.create_snapshot(kg, version_label="2024-Q1",
+                          author="user@example.com",
+                          description="Q1 2024 baseline")
+
+# List versions (not list_snapshots)
+for v in versioner.list_versions():
+    print(f"{v['label']:12s}  {v['author']}")
+
+# Compare two versions (not diff_versions)
+diff = versioner.compare_versions("2023-Q4", "2024-Q1")
+print(f"Entities added:      {diff['summary']['entities_added']}")
+print(f"Relationships added: {diff['summary']['relationships_added']}")
+
+# Retrieve a version (not restore_snapshot)
+past_kg = versioner.get_version("2023-Q4")
+
+# SHA-256 integrity check
+versioner.verify_checksum(past_kg)
+```
+
+<Tip>
+  完整的类 API、领域示例（人事变动、策略演化、金融时间线）与配置选项，请参见[时序智能](temporal)参考。
+</Tip>
+
+
+## 相似度评分
+
+`SimilarityCalculator` 计算节点嵌入之间的余弦、欧几里得、曼哈顿与相关性相似度：
+
+```python
+from semantica.kg import SimilarityCalculator, NodeEmbedder
+
+# First compute structural embeddings
+embedder   = NodeEmbedder(method="node2vec", embedding_dimension=128)
+embeddings = embedder.compute_embeddings(kg, ["Person", "Organization"], ["RELATED_TO"])
+
+# Then compare nodes by embedding similarity
+calc  = SimilarityCalculator()
+score = calc.cosine_similarity(embeddings["Apple Inc."], embeddings["Google"])
+print(f"Apple–Google structural similarity: {score:.3f}")
+
+# Find structurally similar nodes: returns List[str] of node IDs
+similar = embedder.find_similar_nodes(kg, "Apple Inc.", top_k=5)
+for node_id in similar:
+    print(node_id)
+```
+
+
+## 图分析
+
+<Tabs>
+  <Tab title="中心性">
+    通过五种算法衡量节点重要性。使用 `calculate_all_centrality()` 可以一次性运行全部算法。
+
+    ```python
+    from semantica.kg import CentralityCalculator
+
+    calculator = CentralityCalculator()
+
+    # Run all centrality measures at once
+    all_metrics = calculator.calculate_all_centrality(graph)
+
+    # Or run individually
+    pagerank    = calculator.calculate_pagerank(graph, damping_factor=0.85)
+    betweenness = calculator.calculate_betweenness_centrality(graph)
+    closeness   = calculator.calculate_closeness_centrality(graph)
+
+    # Get the top 10 most important nodes
+    top_nodes = calculator.get_top_nodes(pagerank, top_k=10)
+    ```
+
+    | 方法 | 最适合 |
+    | :------ | :-------- |
+    | `calculate_degree_centrality()` | 连接数最多的节点 |
+    | `calculate_pagerank()` | 基于链接的影响力（类似 Google PageRank） |
+    | `calculate_betweenness_centrality()` | 瓶颈/桥接节点 |
+    | `calculate_closeness_centrality()` | 到所有其他节点最近的节点 |
+    | `calculate_eigenvector_centrality()` | 与其他高影响力节点相连的节点 |
+  </Tab>
+  <Tab title="社区检测">
+    发现图谱中的簇与社区。Louvain 速度最快；Leiden 能产生质量更高的划分。
+
+    ```python
+    from semantica.kg import CommunityDetector
+
+    detector = CommunityDetector()
+
+    # Louvain: fast, high quality (default)
+    communities = detector.detect_communities(graph, algorithm="louvain")
+
+    # Leiden: higher quality, slower
+    communities = detector.detect_communities_leiden(graph, resolution=1.2)
+
+    # Evaluate community quality
+    metrics = detector.calculate_community_metrics(graph, communities)
+    print(f"Modularity: {metrics['modularity']:.3f}")
+    print(f"Communities found: {metrics['num_communities']}")
+    ```
+
+    | 算法 | 优势 |
+    | :--------- | :-------- |
+    | Louvain | 速度快、模块度良好：适合大型图谱 |
+    | Leiden | 模块度最佳：当质量比速度更重要时使用 |
+    | 标签传播 | 接近线性时间：适合超大规模图谱 |
+    | K-派系 | 重叠社区：节点可以属于多个分组 |
+  </Tab>
+  <Tab title="路径查找">
+    查找任意两个节点之间的最短路径与备选路线。
+
+    ```python
+    from semantica.kg import PathFinder
+
+    finder = PathFinder()
+
+    # Dijkstra shortest path
+    path = finder.dijkstra_shortest_path(graph, "Alice", "Bob")
+    print(" → ".join(path["path"]))
+
+    # All shortest paths between two nodes
+    paths = finder.all_shortest_paths(graph, "source", "target")
+
+    # K-Shortest paths (alternative routes)
+    k_paths = finder.find_k_shortest_paths(graph, "source", "target", k=3)
+    ```
+
+    | 算法 | 使用场景 |
+    | :--------- | :-------- |
+    | Dijkstra | 带权最短路径：标准路由 |
+    | A\* | 启发式引导搜索：在大型稀疏图上更快 |
+    | BFS | 无权最短路径：只计跳数 |
+    | K-最短路径 | 多条备选路线 |
+  </Tab>
+  <Tab title="链接预测">
+    预测缺失或尚未出现的边。用于补全知识图谱或发现隐含关系。
+
+    ```python
+    from semantica.kg import LinkPredictor
+
+    predictor = LinkPredictor(method="preferential_attachment")
+
+    # Predict the top 20 most likely missing edges
+    predicted = predictor.predict_links(graph, top_k=20)
+    for link in predicted:
+        print(f"{link['source']} → {link['target']}  (score: {link['score']:.3f})")
+
+    # Score a specific pair
+    score = predictor.score_link(graph, "Alice", "CompanyX")
+    ```
+
+    | 算法 | 最适合 |
+    | :--------- | :-------- |
+    | 优先连接 | 高度数节点的连接预测 |
+    | 共同邻居 | 存在共享连接的节点 |
+    | Jaccard | 归一化的共同邻居重叠度 |
+    | Adamic-Adar | 加权共同邻居（对枢纽节点降权） |
+    | 资源分配 | 保守策略：忽略高度数的中介节点 |
+  </Tab>
+  <Tab title="节点嵌入">
+    使用 Node2Vec 计算结构嵌入，然后查找相似节点，或供下游机器学习使用。
+
+    ```python
+    from semantica.kg import NodeEmbedder, SimilarityCalculator
+
+    # Compute Node2Vec embeddings
+    embedder = NodeEmbedder(method="node2vec", embedding_dimension=128)
+    embeddings = embedder.compute_embeddings(
+        graph, ["Person", "Organization"], ["RELATED_TO"]
+    )
+
+    # Find structurally similar nodes
+    similar = embedder.find_similar_nodes(graph, "Apple Inc.", top_k=5)
+    for node_id in similar:
+        print(node_id)
+
+    # Compare two specific nodes by embedding similarity
+    calc  = SimilarityCalculator()
+    score = calc.cosine_similarity(embeddings["Apple Inc."], embeddings["Google"])
+    print(f"Structural similarity: {score:.3f}")
+    ```
+
+    <Note>
+      `find_similar_nodes` 返回 `List[str]`：一个节点 ID 列表，而非节点对象。完整节点数据请通过 `graph["nodes"]` 查询。
+    </Note>
+  </Tab>
+</Tabs>
+
+
+## 算法总览
+
+| 类别 | 算法 | 使用场景 |
+| :-------- | :---------- | :--------- |
+| 节点嵌入 | Node2Vec | 结构相似性、节点表示 |
+| 相似度 | 余弦、欧几里得、曼哈顿、相关性 | 节点匹配、推荐 |
+| 路径查找 | Dijkstra、A\*、BFS、K-最短路径 | 路线规划、网络分析 |
+| 链接预测 | 优先连接、Jaccard、Adamic-Adar | 网络补全 |
+| 中心性 | 度、介数、接近度、PageRank | 影响力分析 |
+| 社区检测 | Louvain、Leiden、标签传播 | 社交聚类 |
+| 连通性 | 连通分量、桥、密度 | 网络健壮性 |
+
+
+## GraphValidator
+
+校验图谱结构：检查必填字段、重复 ID、悬空边，并可选择性地检测环与孤立节点：
+
+```python
+from semantica.kg import GraphValidator
+
+validator = GraphValidator()
+result    = validator.validate(kg)   # accepts the dict returned by GraphBuilder.build()
+
+if result.is_valid:
+    print("Graph is valid")
+else:
+    for issue in result.issues:
+        print(f"{issue.severity.value}: {issue.message}")
+```
+
+传入 `strict=True` 可将警告视为错误。传入带有 `"entity_types"` 和 `"relationship_types"` 键的 `schema` 字典，即可对照已知的类型词表进行校验。
+
+## 配置
+
+```yaml
+kg:
+  resolution:
+    threshold: 0.9
+    strategy: semantic
+
+  temporal:
+    enabled: true
+    default_validity: infinite
+```
+
+- [图存储](graph_store)——把图谱持久化到 Neo4j、FalkorDB 或 Apache AGE。
+- [Semantic Extract](semantic_extract)——提供给 GraphBuilder 的实体与关系来源。
+- [可视化](visualization)——交互式可视化知识图谱。
+- [Conflicts](conflicts)——冲突检测与解决。
+
+### 实战手册
+
+- [构建知识图谱](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/07_Building_Knowledge_Graphs.ipynb)：知识图谱构建基础 · 入门
+- [你的第一个知识图谱](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/08_Your_First_Knowledge_Graph.ipynb)：从实体抽取到可视化 · 入门
+- [图分析](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/10_Graph_Analytics.ipynb)：中心性与社区检测 · 中级
+- [进阶图分析](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/02_Advanced_Graph_Analytics.ipynb)：PageRank、Louvain、最短路径 · 高级
+- [时序知识图谱](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/10_Temporal_Knowledge_Graphs.ipynb)：时序逻辑与图谱演化 · 高级

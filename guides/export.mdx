@@ -1,0 +1,450 @@
+---
+title: "导出与序列化"
+description: "将知识图谱导出为 RDF（Turtle、JSON-LD、N-Triples）、GraphML、Cypher（Neo4j）、ArangoDB AQL、CSV、Parquet、OWL 等格式。"
+---
+
+## 什么是导出？
+
+导出将 Semantica 图数据转换为外部工具和系统所用的格式。不同于将数据保留在 Semantica 内部的内部持久化机制，导出专门为与外部消费方的互操作而设计。
+
+**导出与内部持久化的对比：**
+- **`AgentContext.store()`** 和图谱持久化将数据保留在 Semantica 内部，用于后续处理、检索与推理
+- **导出函数**则将图数据序列化为外部系统可直接消费的标准化格式
+
+导出让你的知识图谱（Knowledge Graph）数据能够以原生格式接入分析平台、图数据库、RDF 三元组存储、语义网系统、数据仓库、商业智能工具，以及其他需要访问这些数据的下游消费方。
+
+## 为什么使用导出？
+
+**一次构建，多次导出。** 通过 Semantica 的抽取和推理工作流构建知识图谱，然后将同一份图数据导出为多种格式供不同消费方使用，无需重建或重新处理。
+
+**与现有生态系统互操作。** 将 Semantica 图谱接入你所在组织既有的工具与工作流，从 Neo4j 图数据库到 Gephi 可视化，再到 pandas 数据分析流水线。
+
+**分析与报表工作流。** 将图数据送入需要 CSV、Parquet 或 RDF 等特定格式的商业智能工具、统计分析平台和机器学习流水线。
+
+**图数据库迁移与部署。** 将图谱从 Semantica 的内存表示迁移到 Neo4j、ArangoDB 等生产级图数据库或三元组存储，获得可扩展的查询性能。
+
+**RDF 与语义网集成。** 导出为语义网标准格式（Turtle、JSON-LD、N-Triples），以便与本体（Ontology）工具、SPARQL 端点和语义推理系统集成。
+
+**数据湖与数据仓库集成。** 导出为 Parquet 等列式格式，以接入 DuckDB、Apache Spark 和云数据仓库等现代数据栈工具。
+
+**合规与归档工作流。** 生成标准化导出文件，满足强制要求数据格式的监管申报、长期归档和审计追踪需求。
+
+## 何时使用 / 何时不用
+
+**在以下情况下使用导出：**
+- 将 Semantica 图谱与外部系统和工具集成
+- 与使用不同技术栈的团队共享图数据
+- 构建在下游处理中消费图数据的分析流水线
+- 在需要语义网标准的 RDF 与本体工作流中工作
+- 创建报表、可视化和商业智能仪表盘
+- 将图谱迁移到生产数据库以获得可扩展的查询性能
+- 满足对特定数据格式提交的合规要求
+
+**在以下情况下不要使用导出：**
+- 你只是想保存并重新加载 Semantica 状态——请改用内置的持久化机制
+- 智能体持久化与记忆连续性才是你的首要目标
+- 内部的检索、推理和图操作已足以满足你的使用场景
+- 对于完全在 Semantica 内部运行的工作流，导出只会徒增不必要的复杂度
+- 你需要对持续演化的图数据的实时访问——导出生成的是静态快照
+
+**在以下情况下请改用内部持久化：**
+- 你的工作流涉及在 Semantica 内部迭代式地构建图、查询和推理
+- 你需要维护智能体记忆、对话历史和决策追踪
+- 图数据将在 Semantica 工作流中继续得到处理和充实
+
+`export_rdf`、`export_graph`、`export_lpg` 及相关函数只需一次调用即可将 `ContextGraph` 序列化为十种格式中的任意一种，并忠实地保留节点类型、边权重和元数据。当下游消费方——三元组存储、图数据库、可视化工具、ML 流水线或电子表格审计人员——各自需要同一段内存中图的不同格式时，就使用它们。
+
+<Info>
+  所有导出函数的第一个参数都是 `graph.to_dict()`——即 `ContextGraph.to_dict()` 产出的那个 dict。只需构建一次图，就能按需导出为任意多种格式，无需重复序列化。注意，`graph.to_dict()` 会将整个图物化到内存中，因此非常大的图可能需要额外的内存规划。
+</Info>
+
+## 构建待导出的图
+
+在首次导出之前，先填充一个图。下面每个示例都从这份共享设置开始：
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph()
+ctx   = AgentContext(vector_store=vs, knowledge_graph=graph, graph_expansion=True)
+
+ctx.store(
+    [
+        "APT29 exploits CVE-2024-3400 in PAN-OS to target NATO defense contractors.",
+        "CVE-2024-3400 is a critical remote code execution vulnerability in GlobalProtect.",
+        "HAMMERTOSS is APT29's C2 backdoor using Twitter and GitHub as covert channels.",
+    ],
+    extract_entities=True,
+    extract_relationships=True,
+)
+
+graph_data = graph.to_dict()   # single dict, reused across all exports below
+```
+
+## RDF 格式——面向三元组存储与语义推理器
+
+**RDF（Resource Description Framework）** 是语义网的基础数据模型，将信息表示为主-谓-宾三元组（Triplet）。RDF 格式对于与语义网技术、本体工具以及需要形式化知识表示的系统的集成至关重要。
+
+当你的消费方是三元组存储（GraphDB、Stardog、Apache Jena）或 OWL 推理器（HermiT、Pellet）时，你要的就是 RDF。只需一次 `export_rdf` 调用，Semantica 即可导出全部五种标准 RDF 序列化格式。
+
+```python
+from semantica.export import export_rdf
+
+# Turtle — the human-readable default; best for review and Git storage
+export_rdf(graph_data, "threat_graph.ttl", format="turtle")
+
+# N-Triples — one triple per line, no indentation; fastest bulk load into any triple store
+export_rdf(graph_data, "threat_graph.nt", format="ntriples")
+
+# JSON-LD — embeds @context; best when downstream consumers speak JSON natively
+export_rdf(graph_data, "threat_graph.jsonld", format="jsonld")
+
+# RDF/XML — maximum legacy interop; required by some older OWL tools
+export_rdf(graph_data, "threat_graph.rdf", format="rdfxml")
+```
+
+该选哪种格式取决于你的消费方。Turtle 非常适合人工审阅和提交到 Git——紧凑且可读。N-Triples 是批量导入 SPARQL 端点时的最快选择，因为解析器可以逐行流式处理它，无需缓冲整个文件。当下游系统本来就使用 JSON，而你又希望把语义上下文嵌入同一份载荷时，JSON-LD 是正确的选择。RDF/XML 的存在则是为了兼容其他格式问世之前的旧工具。
+
+## 图格式——面向 Gephi、Maltego 与网络分析
+
+**标签属性图（Labeled Property Graph，LPG）** 格式用携带属性和元数据的带类型节点与边来表示网络。这些格式为图可视化工具和网络分析平台而优化，适用于侧重关系探索和结构模式分析的场景。
+
+GraphML、GEXF 和 DOT 是图分析与可视化工具的原生格式。它们保留节点属性、边权重和类型标签，因此你在 Semantica 中构建的图可以在 Gephi 或 NetworkX 中即时渲染，并携带完整的属性数据。
+
+```python
+from semantica.export import export_graph
+
+# GraphML — widest tool support: Gephi, yEd, NetworkX, Maltego
+export_graph(graph_data, "threat_graph.graphml", format="graphml")
+
+# GEXF — richer attribute support in Gephi; better for large attributed graphs
+export_graph(graph_data, "threat_graph.gexf", format="gexf")
+
+# DOT (Graphviz) — automated layout and rendering for diagrams in reports
+export_graph(graph_data, "threat_graph.dot", format="dot")
+```
+
+如果你用 Gephi 准备分析师简报，GEXF 值得了解——它支持 GraphML 无法表达的动态属性和时序数据。当你需要 Graphviz 为图自动布局、以便嵌入 PDF 报告或文档站点时，DOT 是正确的选择。
+
+## Neo4j Cypher——面向图模式威胁狩猎
+
+**Cypher** 是 Neo4j 的声明式图查询语言，通过模式匹配来查找和操作图数据。Cypher 导出让团队能够借助 Neo4j 优化过的查询引擎运行复杂的图查询、模式检测和图分析。
+
+当 SOC 团队想针对图谱运行 Cypher 查询——比如找出共享基础设施的威胁行为者，或追踪多跳攻击路径——你可以导出为 Cypher，再用一条命令把结果加载到 Neo4j Desktop 或 Memgraph。
+
+```python
+from semantica.export import export_lpg
+
+export_lpg(graph_data, "threat_graph.cypher", method="cypher")
+```
+
+输出文件包含可直接运行的 `CREATE` 与 `MATCH` 语句：
+
+```text
+CREATE (:ThreatActor {id: "apt29", name: "APT29", nation_state: "RU"})
+CREATE (:Vulnerability {id: "cve-2024-3400", cvss_score: 10.0})
+MATCH (a {id: "apt29"}), (b {id: "cve-2024-3400"}) CREATE (a)-[:EXPLOITS {confidence: 0.97}]->(b)
+```
+
+用 `cypher-shell < threat_graph.cypher` 加载进 Neo4j，或将文件拖入 Neo4j Desktop 的导入向导。此后，SOC 团队无需接触 Python 即可编写 Cypher 查询。
+
+## ArangoDB AQL——面向多模型查询
+
+ArangoDB 在同一查询语言中融合了图遍历、文档查询与全文检索。当你的合规团队需要将图谱与结构化监管文档做联接时，ArangoDB 就是合适的后端。
+
+```python
+from semantica.export import export_arango
+
+export_arango(
+    graph_data,
+    "regulatory.aql",
+    vertex_collection         = "regulatory_nodes",
+    edge_collection           = "regulatory_edges",
+    include_collection_creation = True,    # emits CREATE COLLECTION statements
+    batch_size                = 200,       # INSERT statements batched to avoid memory spikes
+)
+```
+
+`include_collection_creation=True` 标志意味着这个 AQL 文件是自包含的——它会先创建集合再插入数据，因此你可以直接对全新的 ArangoDB 实例运行它，无需任何前置设置。
+
+## CSV——面向电子表格审计与统计分析
+
+**CSV（Comma-Separated Values）** 是一种简单的表格格式，受到电子表格应用、统计工具和数据分析平台的普遍支持。CSV 导出将图数据展平为行与列，适合主要围绕表格数据工作的团队。
+
+合规团队离不开 Excel，数据科学团队离不开 pandas，而两者都需要 CSV。`export_csv` 把图写成扁平的行——当你传入基础路径时，实体和关系会分别写成单独的文件。
+
+```python
+from semantica.export import export_csv
+
+# Single CSV — nodes and edges interleaved with a "record_type" column
+export_csv(graph_data, "threat_graph.csv")
+
+# Split CSV — writes threat_graph_entities.csv and threat_graph_relationships.csv
+export_csv(
+    {"entities": graph_data.get("nodes", []),
+     "relationships": graph_data.get("edges", [])},
+    "threat_graph",
+)
+```
+
+拆分形式对下游工具更有用：实体 CSV 可用于生成实体类型的数据透视表；关系 CSV 可用于在 pandas 或 R 中进行网络分析。
+
+## Parquet——面向数据湖与 ML 流水线
+
+**Parquet** 是一种为分析工作负载优化的列式存储格式，提供高效压缩与快速查询性能。Parquet 文件可与现代数据栈工具和机器学习框架无缝集成。
+
+当数据科学团队在 DuckDB、Spark 或湖仓中针对图属性做特征工程时，Parquet 就是他们想要的格式。它是列式的、经过压缩的，所有主流 ML 框架都能读取。
+
+```python
+from semantica.export import export_parquet
+
+export_parquet(graph_data, "threat_graph_entities.parquet")
+```
+
+数据一旦进入 Parquet，图实体就成为一个 DataFrame，可以与遥测数据联接、用外部特征加以富化，再送入分类模型——数据科学侧无需编写任何自定义序列化代码。
+
+## OWL——面向基于本体的推理
+
+**OWL（Web Ontology Language）** 是一个语义网标准，用于表示带有类、属性和逻辑约束的丰富本体。OWL 支持对形式化知识模型进行自动推理、一致性检查和推断。
+
+**OntologyGenerator** 通过分析实体类型、关系和模式，从图数据创建形式化本体，生成类层次结构、属性定义和逻辑约束。这使得 Schema 校验、自动推理以及与语义网工具的集成成为可能。
+
+当你使用 `OntologyGenerator` 从图生成了 OWL 本体之后，即可将其导出，用于 Protégé、HermiT 推理或监管申报。
+
+```python
+from semantica.export import export_owl
+from semantica.ontology import OntologyGenerator
+
+ontology = OntologyGenerator(base_uri="https://example.org/cti/") \
+               .generate_from_graph(graph_data)
+
+export_owl(ontology, "cti_ontology.owl", format="owl-xml")
+```
+
+## 常见陷阱
+
+**把导出与持久化混为一谈。** 导出创建的是面向互操作的外部快照，而持久化维护的是 Semantica 的内部状态。当你需要保存并重新加载智能体记忆、或继续基于图的工作流时，不要用导出——请改用内置的持久化机制。
+
+**图变更之后导出了过期的图数据。** 在对图的最后一批修改完成之后，务必调用 `graph.to_dict()`。如果你在工作流早期就存下了 `graph_data`，随后又修改了图，导出结果反映的将是过期状态，而不是你的最新改动。
+
+**重新运行昂贵的抽取，而不是复用现有图数据。** 通过实体抽取和关系推断把图构建一次，然后用同一个 `graph_data` dict 导出为多种格式。不要为每种导出格式都重建图。
+
+**在 CSV 已足够时选择了过于复杂的格式。** 如果下游消费方处理的是表格数据，也不需要保留图结构，那么 CSV 比 RDF 或 GraphML 更简单、更快、支持面也更广。
+
+**以为溯源（Provenance）和历史会自动出现在导出结果中。** 标准导出格式只捕获图的当前状态，不包含溯源链、版本历史或审计追踪。如果你需要完整的血缘信息，请使用专门的溯源导出机制。
+
+**忽视下游的 Schema 要求。** 不同系统对标识符格式、属性 Schema 和关系表示方式各有预期。在部署到生产工作流之前，先验证导出数据是否符合消费系统的预期。
+
+**在缺乏内存规划的情况下导出超大图。** `graph.to_dict()` 操作会把整个图物化到内存中。对于非常大的图，请监控内存使用情况，并在资源受限的环境中考虑分块或流式方案。
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防——CTI/威胁">
+
+网络威胁情报（CTI）团队需要让同一份威胁图谱同时出现在四个地方：跨团队查询用的 SPARQL 端点、分析师简报用的 Gephi、图模式威胁狩猎用的 Neo4j，以及供 SIEM 摄取流水线使用的 JSON-LD 订阅源。四次导出，一份图 dict。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.ingest import ingest_file
+from semantica.export import export_rdf, export_graph, export_lpg
+import os
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph()
+ctx   = AgentContext(vector_store=vs, knowledge_graph=graph, graph_expansion=True)
+
+apt_report = ingest_file("apt29_2024_campaign.pdf", method="file")
+ctx.store(apt_report.text, extract_entities=True, extract_relationships=True)
+
+graph_data = graph.to_dict()
+os.makedirs("./exports/", exist_ok=True)
+
+# 1. Turtle → SPARQL endpoint (Apache Jena, Stardog, GraphDB)
+export_rdf(graph_data, "./exports/threat_graph.ttl", format="turtle")
+
+# 2. JSON-LD → SIEM ingestion (Splunk, Elastic) — JSON-native pipeline
+export_rdf(graph_data, "./exports/threat_graph.jsonld", format="jsonld")
+
+# 3. GraphML → Gephi for analyst briefing visualization
+export_graph(graph_data, "./exports/threat_graph.graphml", format="graphml")
+
+# 4. Cypher → Neo4j for graph-pattern threat hunting
+export_lpg(graph_data, "./exports/threat_graph.cypher", method="cypher")
+
+print("Threat graph exported to 4 formats.")
+```
+
+</Tab>
+
+<Tab title="安全——SOC/事件">
+
+事件活跃处置期间，SOC 需要把图谱送入 Neo4j 用于狩猎、以 GEXF 用于 Gephi 时间线可视化，并以 GraphML 用于导入 Maltego。三者均来自同一份内存中的图。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.export import export_lpg, export_graph
+import os
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph()
+ctx   = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    decision_tracking=True,
+)
+
+incidents = [
+    "Host ws-finance-03 (10.10.1.5): scheduled task created via wmiprvse.exe — T1053.005",
+    "User jsmith logged in from anomalous IP 185.220.101.7 (Tor exit node)",
+    "EDR alert on dc01: LSASS memory access by procdump.exe — T1003.001",
+]
+ctx.store(incidents, extract_entities=True, extract_relationships=True)
+
+graph_data = graph.to_dict()
+os.makedirs("./soc_exports/", exist_ok=True)
+
+# Cypher → Neo4j for Cypher-based threat hunting
+export_lpg(graph_data, "./soc_exports/incident_graph.cypher", method="cypher")
+
+# GEXF → Gephi for timeline visualization
+export_graph(graph_data, "./soc_exports/incident_graph.gexf", format="gexf")
+
+# GraphML → Maltego for link analysis
+export_graph(graph_data, "./soc_exports/incident_graph.graphml", format="graphml")
+
+print("SOC graph exported — load incident_graph.cypher into Neo4j Desktop.")
+```
+
+</Tab>
+
+<Tab title="生命科学——临床/制药">
+
+临床试验数据需要送达 SPARQL 端点以支持跨试验联邦查询、一份 CSV 以支持 R 中的统计分析，以及一份 Turtle 文件以供监管申报。图谱编码了从试验方案中抽取的化合物-靶点-疾病关系。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.ingest import DBIngestor
+from semantica.export import export_rdf, export_csv
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph(advanced_analytics=True)
+ctx   = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    retention_days=None,
+)
+
+db = DBIngestor()
+trial_rows = db.execute_query(
+    "postgresql://readonly@clindb:5432/trials",
+    "SELECT compound, target_protein, disease, mechanism FROM trial_protocols",
+)
+trial_texts = [
+    "{} targets {} in {} via {}.".format(
+        r["compound"], r["target_protein"], r["disease"], r["mechanism"]
+    )
+    for r in trial_rows
+]
+ctx.store(trial_texts, extract_entities=True, extract_relationships=True)
+
+graph_data = graph.to_dict()
+
+# N-Triples for fast bulk load into GraphDB or Stardog
+export_rdf(graph_data, "./exports/clinical_graph.nt",  format="ntriples")
+
+# Turtle for human review and regulatory dossier attachment
+export_rdf(graph_data, "./exports/clinical_graph.ttl", format="turtle")
+
+# Split CSV for statistical analysis in R / SAS
+export_csv(
+    {"entities": graph_data.get("nodes", []),
+     "relationships": graph_data.get("edges", [])},
+    "./exports/clinical_graph",
+)
+
+print("Clinical graph exported — ready for SPARQL endpoint and statistical review.")
+```
+
+</Tab>
+
+<Tab title="银行业——风险/合规">
+
+一张监管知识图谱必须送达 ArangoDB 用于多模型合规查询、以 RDF/XML 形式进入长期监管归档，并以 JSON-LD 形式供合规仪表盘 API 使用。Basel III 监管规定、风险参数及其关系全部作为图节点被捕获。
+
+```python
+from semantica.context import AgentContext, ContextGraph
+from semantica.vector_store import VectorStore
+from semantica.ingest import ingest_file
+from semantica.export import export_arango, export_rdf
+import os
+
+vs    = VectorStore(backend="faiss", dimension=768)
+graph = ContextGraph()
+ctx   = AgentContext(
+    vector_store=vs,
+    knowledge_graph=graph,
+    graph_expansion=True,
+    retention_days=2555,    # 7-year regulatory retention
+)
+
+regs = [
+    ingest_file("basel3_cre20.pdf",       method="file"),
+    ingest_file("sr_11_7_model_risk.pdf", method="file"),
+    ingest_file("bcbs239.pdf",            method="file"),
+]
+ctx.store(
+    [r.text for r in regs],
+    extract_entities=True,
+    extract_relationships=True,
+)
+
+graph_data = graph.to_dict()
+os.makedirs("./compliance_exports/", exist_ok=True)
+
+# ArangoDB AQL for multi-model regulatory queries (graph + document joins)
+export_arango(
+    graph_data,
+    "./compliance_exports/regulatory.aql",
+    vertex_collection           = "regulatory_nodes",
+    edge_collection             = "regulatory_edges",
+    include_collection_creation = True,
+    batch_size                  = 200,
+)
+
+# RDF/XML for long-term regulatory archive (maximum legacy interop)
+export_rdf(graph_data, "./compliance_exports/regulatory_audit.rdf", format="rdfxml")
+
+# JSON-LD for compliance dashboard REST API
+export_rdf(graph_data, "./compliance_exports/regulatory.jsonld", format="jsonld")
+
+print("Compliance graph exported in 3 formats.")
+```
+
+</Tab>
+
+</Tabs>
+
+## 选择合适的格式
+
+格式的选择通常取决于谁在消费输出、以及他们已经在用什么工具。
+
+如果你的消费方使用 SPARQL 或三元组存储，就选择 Turtle（人工审阅）、N-Triples（批量导入）或 JSON-LD（JSON 原生流水线）。如果他们使用属性图数据库，Cypher 对应 Neo4j 或 Memgraph；当他们还需要在同一套系统中做文档和搜索查询时，AQL 对应 ArangoDB。如果他们使用图可视化工具，GraphML 是工具支持面最广、最稳妥的默认选择，GEXF 专门为 Gephi 提供更丰富的属性处理，而当你需要 Graphviz 自动渲染静态示意图时，DOT 是正确之选。如果他们整天泡在电子表格或统计工具里，CSV 是最省事的选择。如果他们在 DuckDB、Spark 或湖仓中运行 ML 流水线，Parquet 就是他们想要的。
+
+对于语义推理和本体工作，OWL/XML 就是那个格式——它是唯一能为 Protégé 和 HermiT 保留完整类层次结构的输出。
+
+## 相关指南
+
+- [上下文图谱](context-graphs)——`ContextGraph` 对象，它的 `to_dict()` 为所有导出提供输入
+- [本体管理](ontology)——导出从你的图生成的 OWL 本体
+- [推理与规则](reasoning)——推理结果可导出为 RDF 三元组
+- [变更管理](change-management)——导出前对图做快照，以证明导出来自已验证的状态
+- [Pipeline](pipeline)——在单个 `PipelineBuilder` 中串联摄取、抽取与导出

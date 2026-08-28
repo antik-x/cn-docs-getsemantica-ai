@@ -1,0 +1,303 @@
+---
+title: "Parse 模块"
+description: "文档解析与文本抽取：DocumentParser 面向标准格式，DoclingParser 面向复杂版面。"
+icon: "file-lines"
+---
+
+**`semantica.parse`** 从非结构化文档中抽取**结构化文本、版面、表格与元数据**：
+
+- `DocumentParser`：格式覆盖面广（PDF、DOCX、HTML、JSON、CSV、PPTX、XLSX），无需额外依赖
+- `DoclingParser`：复杂版面、合并单元格表格、多栏 PDF 与 OCR（`pip install docling`）
+- 两者都返回结构一致的 `dict`，包含 `full_text`、`metadata`、`pages` 与 `tables` 键
+- `parse_batch()` 可并行处理多个文件，错误处理方式可配置
+
+
+## 快速上手
+
+### 安装
+
+对于标准格式，parse 模块开箱即用：
+
+```python
+from semantica.parse import DocumentParser
+
+parser = DocumentParser()
+result = parser.parse("document.pdf")
+print(result["full_text"])  # Extracted text content
+```
+
+如需更强的表格抽取能力和复杂版面支持，请安装 Docling 依赖：
+
+```bash
+pip install docling
+```
+
+```python
+from semantica.parse import DoclingParser
+
+parser = DoclingParser(export_format="markdown")
+result = parser.parse("document.pdf", extract_tables=True)
+print(result["tables"])  # Enhanced table extraction
+```
+
+### 解析第一个文档
+
+```python
+from semantica.parse import DocumentParser
+
+# Parse any supported format
+parser = DocumentParser()
+result = parser.parse("annual_report.pdf")
+
+# Access extracted content
+text = result["full_text"]           # Complete document text
+metadata = result["metadata"]        # Document properties
+pages = result.get("pages", [])      # Page-level content
+
+print(f"Extracted {len(text)} characters from {metadata.get('page_count', 0)} pages")
+```
+
+## 解析器选择指南
+
+<Tabs>
+  <Tab title="DocumentParser：标准">
+    零额外依赖。适用于干净的 PDF、Word 文档、HTML 与结构化格式。
+
+    | | |
+    | :-- | :-- |
+    | **格式** | PDF、DOCX、HTML、TXT、JSON、CSV、PPTX、XLSX |
+    | **速度** | 快 |
+    | **安装** | 无需任何操作：包含在基础安装中 |
+    | **适用场景** | 干净的文档、广泛的格式支持、生产流水线 |
+
+    ```python
+    from semantica.parse import DocumentParser
+
+    parser = DocumentParser()
+    result = parser.parse("contract.pdf")
+
+    print(result["full_text"])        # Extracted text
+    print(result["metadata"])         # Title, author, page count, ...
+    print(len(result.get("pages", [])))  # Per-page breakdown
+    ```
+  </Tab>
+  <Tab title="DoclingParser：复杂版面">
+    表格抽取能力更强，支持 OCR 与多栏 PDF。需要 `pip install docling`。
+
+    | | |
+    | :-- | :-- |
+    | **格式** | PDF、DOCX、PPTX、XLSX、HTML、图像 |
+    | **速度** | 较慢（深度版面分析） |
+    | **安装** | `pip install docling` |
+    | **适用场景** | 合并单元格表格、扫描文档、多栏版面 |
+
+    ```python
+    from semantica.parse import DoclingParser
+
+    parser = DoclingParser(export_format="markdown")
+    result = parser.parse(
+        "financial_report.pdf",
+        extract_tables=True,
+        extract_text=True,
+    )
+
+    for i, table in enumerate(result["tables"]):
+        print(f"Table {i+1}: {table['row_count']} rows × {table['col_count']} columns")
+        print(f"  Page: {table['page_number']}")
+        for row in table["rows"][:3]:
+            print(" | ".join(row))
+    ```
+
+    <Tip>
+      先从 `DocumentParser` 开始。只有当你需要更好的表格抽取效果，或遇到复杂的 PDF 版面时，再切换到 `DoclingParser`。
+    </Tip>
+  </Tab>
+  <Tab title="批量处理">
+    并行处理多个文件，并按文件隔离错误。
+
+    ```python
+    from semantica.parse import DocumentParser
+
+    parser  = DocumentParser()
+    results = parser.parse_batch(
+        ["doc1.pdf", "doc2.docx", "doc3.html"],
+        continue_on_error=True,   # skip failed files instead of raising
+    )
+
+    print(f"Parsed: {results['success_count']}/{results['total']}")
+
+    for item in results["successful"]:
+        print(f"{item['file_path']}: {len(item['result']['full_text'])} chars")
+
+    for item in results["failed"]:
+        print(f"FAILED: {item['file_path']}: {item['error']}")
+    ```
+
+    <Note>
+      对于生产环境的批量任务，建议使用 `continue_on_error=True`，以应对个别文件损坏或格式不受支持的情况。
+    </Note>
+  </Tab>
+</Tabs>
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `DocumentParser` | 自动检测格式：委派给特定格式的解析器（PDF、DOCX、HTML、JSON、CSV 等） |
+| `DoclingParser` | 复杂版面、合并单元格表格、多栏 PDF 与 OCR（`pip install docling`） |
+| `DoclingMetadata` | 来自 Docling 解析的文档元数据 |
+| `PDFParser` | PDF 文本与元数据抽取 |
+| `WebParser` | URL 抓取 + HTML 解析 |
+| `EmailParser` | `.eml` / `.msg` 电子邮件文件，支持附件提取 |
+| `CodeParser` | 源代码文件，支持语法感知的分块检测 |
+
+## DocumentParser
+
+面向干净、机器可读文档的标准解析器：
+
+```python
+from semantica.parse import DocumentParser
+
+parser = DocumentParser()
+result = parser.parse("data/report.pdf")
+
+print(result["full_text"])      # Complete extracted text
+print(result["metadata"])       # Document properties (title, author, page_count, etc.)
+if "pages" in result:           # Page-level content (when available)
+    print(f"Pages: {len(result['pages'])}")
+```
+
+支持的格式：PDF、DOCX、HTML、TXT、JSON、CSV、PPTX、XLSX。
+
+## DoclingParser
+
+使用 Docling 后端的高级解析器：能够处理 `DocumentParser` 无法处理的版面：
+
+```bash
+pip install docling
+```
+
+```python
+from semantica.parse import DoclingParser
+
+parser = DoclingParser(
+    export_format="markdown",      # Export format: "markdown" | "html" | "json"
+    enable_ocr=False               # Enable OCR for scanned documents
+)
+
+result = parser.parse(
+    "data/annual_report.pdf",
+    extract_tables=True,           # Extract structured tables
+    extract_images=False,          # Extract image regions
+    extract_text=True              # Extract text content
+)
+
+print(result["full_text"])    # Complete extracted text
+print(result["tables"])       # Structured table data
+if "pages" in result:         # Page-level content
+    print(f"Pages: {len(result['pages'])}")
+```
+
+在以下情况使用 `DoclingParser`：
+
+- 多栏 PDF 版面
+- 含合并单元格或复杂表头的表格
+- 含内嵌图表的 PPTX 幻灯片
+- 含公式的 XLSX 电子表格
+- 需要 OCR 的扫描文档
+- 学术论文与技术报告
+
+## OCR 支持
+
+```python
+parser = DoclingParser(
+    enable_ocr=True,           # Enable OCR via PdfPipelineOptions
+    export_format="markdown"
+)
+
+result = parser.parse("data/scanned_contract.pdf")
+print(result["full_text"])     # OCR-extracted text
+```
+
+## 支持的格式
+
+| 格式 | 扩展名 | 所用解析器 | 说明 |
+| :------ | :--------- | :----------- | :----- |
+| PDF | `.pdf` | `PDFParser` / `DoclingParser` | 文本、表格、元数据；Docling 额外提供 OCR |
+| Word | `.docx` | 内置 | 文本、标题、表格、元数据 |
+| HTML | `.html`、`.htm` | `HTMLParser` / `WebParser` | `WebParser` 可抓取远程 URL |
+| Markdown | `.md` | 内置 | 保留标题层级 |
+| 纯文本 | `.txt` | `TXTParser` | 元数据较少 |
+| JSON | `.json` | `JSONParser` | 每行一个对象，或数组形式 |
+| CSV / TSV | `.csv`、`.tsv` | `CSVParser` | 自动检测表头 |
+| Excel | `.xlsx`、`.xls` | 内置 | 支持选择工作表 |
+| PowerPoint | `.pptx` | 内置 | 内嵌图表请用 `DoclingParser` |
+| 电子邮件 | `.eml`、`.msg` | `EmailParser` | 会提取附件 |
+| XML | `.xml` | `XMLIngestor` | 防 XXE，支持可选的 XSD 校验 |
+| 归档 | `.zip`、`.tar` | `FileIngestor` | 递归提取 |
+| 源代码 | `.py`、`.js`、`.java` 等 | `CodeParser` | AST 感知的分块检测 |
+
+## 解析器输出结构
+
+两个解析器都返回具有以下结构的字典：
+
+```python
+result = {
+    "full_text": str,              # Complete extracted text
+    "metadata": dict,              # Document properties and statistics
+    "pages": List[dict],           # Page-level content (when available)
+    "tables": List[dict],          # Structured table data (DoclingParser)
+    "images": List[dict],          # Image regions (DoclingParser)
+    "total_pages": int,            # Total page count
+    "export_format": str           # Format used for text extraction (DoclingParser)
+}
+```
+
+### 元数据结构
+
+```python
+metadata = {
+    "file_path": str,              # Source file path
+    "page_count": int,             # Number of pages
+    "format": str,                 # File format ("pdf", "docx", etc.)
+    # Additional fields vary by parser and document type
+}
+```
+
+## DocumentParser 方法
+
+| 方法 | 返回值 | 说明 |
+| :------ | :------- | :----------- |
+| `parse(source)` | `dict` | 自动检测格式并抽取文本、元数据与表格 |
+| `parse_batch(sources)` | `dict` | 并行处理多个来源 |
+| `extract_text(path)` | `str` | 仅抽取文档中的文本内容 |
+| `extract_metadata(path)` | `dict` | 仅抽取文档中的元数据 |
+
+## 与 FileIngestor 集成
+
+最常见的模式：先摄取一个目录，再解析其中每个来源：
+
+```python
+from semantica.ingest import FileIngestor
+from semantica.parse import DoclingParser
+
+ingestor = FileIngestor()
+parser   = DoclingParser(export_format="markdown")
+
+sources = ingestor.ingest("data/reports/")
+for source in sources:
+    result = parser.parse(source)
+    # Access extracted content
+    text = result["full_text"]
+    tables = result["tables"] 
+    metadata = result["metadata"]
+```
+
+<Note>
+  Docling 是可选依赖。如果未安装 `docling`，`DoclingParser` 会抛出 `ImportError` 并附上安装说明：`pip install docling`。`DocumentParser` 始终可用，无需任何额外组件。
+</Note>
+
+- [摄取](ingest) —— 在解析之前先加载文件。
+- [切分](split) —— 将解析后的文本分块，用于嵌入与抽取。
+- [Docling 集成](../integrations/docling) —— 完整的 Docling 集成设置指南。
+- [语义抽取](semantic_extract) —— 从解析后的文本中抽取实体与关系。

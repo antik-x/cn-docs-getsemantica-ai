@@ -1,0 +1,64 @@
+---
+title: "Evals 模块"
+description: "用于衡量知识图谱质量、抽取准确率与流水线性能的评估框架：即将推出。"
+icon: "chart-line"
+---
+
+**`semantica.evals`** 计划成为一个全面的评估（Evaluation）框架，用于衡量**抽取准确率、图谱质量与流水线性能**。
+
+<Warning>
+  **`semantica.evals` 尚未实现。** 该模块只是一个占位符，`__all__ = []`。没有任何类或函数可供导入。本页仅描述规划中的 API。
+</Warning>
+
+## 规划中的功能
+
+发布后，`semantica.evals` 将提供：
+
+| 规划中的类 | 作用 |
+| :--- | :--- |
+| `KGEvaluator` | 完整性、一致性、Schema 合规性、覆盖率与孤立节点检测 |
+| `ExtractionEvaluator` | 对照金标数据集的 NER 精确率 / 召回率 / F1 与关系抽取指标 |
+| `PipelineBenchmark` | 吞吐量（docs/sec）、每步延迟、峰值内存与错误率 |
+| `RegressionTracker` | 记录运行，并跨提交或配置变更比较指标 |
+| `EvalReport` | 结构化报告：`{scores, regressions, recommendations}` |
+| `DeduplicationEvaluator` | 合并精确率、假阳性 / 假阴性率 |
+| `ReasoningEvaluator` | 推断准确率、规则覆盖率与推导深度 |
+
+## 当前的替代方案
+
+在 `semantica.evals` 发布之前，请使用 `semantica.ontology.OntologyEvaluator` 获取本体（Ontology）质量指标：
+
+```python
+from semantica.ontology import OntologyEvaluator
+
+evaluator = OntologyEvaluator()
+
+# evaluate_ontology takes the ontology dict only
+result = evaluator.evaluate_ontology(ontology)
+
+print("Coverage:    ", result.coverage_score)
+print("Completeness:", result.completeness_score)
+print("Gaps:        ", result.gaps)
+print("Suggestions: ", result.suggestions)
+
+# Full report with class granularity and relation completeness
+report = evaluator.generate_report(ontology)
+print("Coverage score:    ", report["evaluation"]["coverage_score"])
+print("Completeness score:", report["evaluation"]["completeness_score"])
+print("Relation coverage: ", report["relation_completeness"]["relation_coverage"])
+```
+
+`evaluate_ontology()` 返回的 `EvaluationResult` 字段：
+
+| 字段 | 类型 | 描述 |
+| :----- | :---- | :----------- |
+| `coverage_score` | `float` | 本体能够回答的能力问题（competency questions）所占比例 |
+| `completeness_score` | `float` | 类完整性与属性完整性分数的平均值 |
+| `gaps` | `List[str]` | 已识别的覆盖缺口 |
+| `suggestions` | `List[str]` | 改进建议 |
+| `metrics` | `dict` | 详细的子指标 |
+
+- [Semantic Extract](semantic_extract)——抽取模块。
+- [知识图谱](kg)——图谱质量评估。
+- [Pipeline](pipeline)——流水线性能指标。
+- [Ontology Evaluator](ontology)——本体质量指标现已可用。

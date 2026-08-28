@@ -1,0 +1,199 @@
+---
+title: "Databricks 集成"
+description: "把 Databricks 的 Unity Catalog 元数据与 Delta Lake 表摄取到 Semantica 的 KG 流水线。"
+icon: "cloud"
+---
+
+> 以个人访问令牌或 OAuth M2M 认证，把 Delta Lake 表与 Unity Catalog 元数据（Schema、血缘）从 Databricks 抽取到 Semantica。
+
+
+## 安装
+
+```bash
+# Install with Databricks support
+pip install "semantica[db-databricks]"
+
+# Or install the connectors separately
+pip install databricks-sdk databricks-sql-connector
+```
+
+
+## 基本用法
+
+```python
+from semantica.ingest import DatabricksIngestor
+import os
+
+ingestor = DatabricksIngestor(
+    host=os.getenv("DATABRICKS_HOST"),           # e.g. https://adb-xxx.azuredatabricks.net
+    token=os.getenv("DATABRICKS_TOKEN"),
+    http_path=os.getenv("DATABRICKS_HTTP_PATH"),  # SQL warehouse or cluster HTTP path
+    catalog=os.getenv("DATABRICKS_CATALOG", "main"),
+    schema=os.getenv("DATABRICKS_SCHEMA", "default"),
+)
+
+data = ingestor.ingest_table("customers")
+print(f"Retrieved {data.row_count} rows: columns: {data.columns}")
+```
+
+<Tip>
+使用环境变量（或配合 `python-dotenv` 使用 `.env` 文件），让凭证远离源代码。不带任何参数的 `DatabricksIngestor()` 会自动从 `DATABRICKS_*` 环境变量读取配置。
+</Tip>
+
+
+## 认证方式
+
+<Tabs>
+  <Tab title="个人访问令牌">
+    ```python
+    ingestor = DatabricksIngestor(
+        host="https://adb-xxx.azuredatabricks.net",
+        token="dapi-xxxxxxxx",
+        http_path="/sql/1.0/warehouses/xxxxxxxx",
+    )
+    ```
+  </Tab>
+  <Tab title="OAuth M2M（推荐）">
+    ```python
+    ingestor = DatabricksIngestor(
+        host="https://adb-xxx.azuredatabricks.net",
+        client_id="your_service_principal_client_id",
+        client_secret="your_service_principal_client_secret",
+        http_path="/sql/1.0/warehouses/xxxxxxxx",
+    )
+    ```
+    生产环境首选：配置中不存放长期有效的个人令牌。
+  </Tab>
+</Tabs>
+
+<Note>
+`http_path` 标识用于执行查询的 SQL 仓库或通用集群。你可以在 Databricks UI 的 **SQL Warehouses → Connection details** 下找到它。Unity Catalog 元数据调用（`list_catalogs`、`get_table_schema`、`get_table_lineage` 等）只需要 `host` 和凭证——这些调用不需要 `http_path`。
+</Note>
+
+
+## 查询
+
+### 带过滤条件摄取表
+
+```python
+data = ingestor.ingest_table(
+    "customers",
+    catalog="main",
+    schema="default",
+    where="country = 'USA' AND created_date > '2024-01-01'",
+    order_by="created_date DESC",
+    limit=10000,
+)
+```
+
+### 自定义 SQL
+
+```python
+data = ingestor.ingest_query("""
+    SELECT customer_id, SUM(amount) AS total_amount
+    FROM main.default.sales
+    WHERE date >= '2024-01-01'
+    GROUP BY customer_id
+""")
+```
+
+
+## Unity Catalog 元数据
+
+### Schema 自省
+
+```python
+schema = ingestor.get_table_schema("customers")
+for column in schema["columns"]:
+    print(f"{column['name']}: {column['type']}")
+```
+
+### 目录、Schema 与表
+
+```python
+catalogs = ingestor.list_catalogs()
+schemas = ingestor.list_schemas(catalog="main")
+tables = ingestor.list_tables(catalog="main", schema="default")
+```
+
+### 表与列血缘
+
+```python
+lineage = ingestor.get_table_lineage("customers", catalog="main", schema="default")
+print(lineage["upstream"])    # tables that feed into `customers`
+print(lineage["downstream"])  # tables derived from `customers`
+```
+
+利用 `get_table_lineage`，可以直接依据 Unity Catalog 的血缘追踪，在知识图谱（Knowledge Graph）中构建 `Table --DEPENDS_ON--> Table` 边，而无需从查询日志重新推导血缘。
+
+<Tip>
+传入 `include_column_lineage=True`，还可以解析每列的上游/下游引用（每列会多出一次 Unity Catalog 请求，因此需要主动开启）：
+
+```python
+lineage = ingestor.get_table_lineage(
+    "customers", catalog="main", schema="default", include_column_lineage=True,
+)
+print(lineage["columns"]["email"])
+# {"upstream": ["main.default.raw_customers.email_address"], "downstream": []}
+```
+
+</Tip>
+
+
+## 导出为 Semantica 文档
+
+```python
+documents = ingestor.export_as_documents(
+    data,
+    id_field="customer_id",
+    text_fields=["name", "email", "notes"],
+)
+print(f"Created {len(documents)} documents for processing")
+```
+
+
+## 批处理大型表
+
+```python
+PAGE_SIZE = 5000
+for page in range(total_pages):
+    data = ingestor.ingest_table(
+        "large_table",
+        limit=PAGE_SIZE,
+        offset=page * PAGE_SIZE,
+    )
+    process_batch(data)
+```
+
+或使用内置的 `batch_size` 参数：
+
+```python
+data = ingestor.ingest_query(
+    "SELECT * FROM main.default.large_table",
+    batch_size=5000,
+)
+```
+
+
+## 故障排查
+
+```python
+from semantica.ingest import DatabricksConnector
+
+connector = DatabricksConnector(
+    host="https://adb-xxx.azuredatabricks.net",
+    token="dapi-xxxxxxxx",
+    http_path="/sql/1.0/warehouses/xxxxxxxx",
+)
+if not connector.test_connection():
+    print("Connection failed: check host, http_path, and credentials")
+```
+
+
+## 另请参阅
+
+- [Ingest 模块](../reference/ingest)——完整的 DatabricksIngestor 及其他所有摄取器。
+- [Snowflake 集成](snowflake)——Snowflake + Databricks 混合部署环境的配套连接器。
+- [Pipeline](../reference/pipeline)——把 Databricks 摄取用作流水线的一个步骤。
+- [安装](../installation)——全部可选依赖（extras）。
+- [知识图谱](../reference/kg)——用摄取的 Databricks 数据构建 KG。

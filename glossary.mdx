@@ -1,0 +1,220 @@
+---
+title: "术语表"
+description: "Semantica 全站使用的术语与概念的参考定义。"
+icon: "book"
+---
+
+<Info>
+  使用 Ctrl+F / Cmd+F 在本页搜索特定术语。
+</Info>
+
+一本速查词典，涵盖 Semantica 文档与代码库中涉及的每个概念、数据结构、算法和标准。
+
+
+## 核心概念
+
+**智能体（Agent）**
+一种自主 AI 系统，能够感知环境、对信息进行推理，并采取行动以达成目标。在 Semantica 中，智能体使用知识图谱作为结构化记忆和上下文，每个决策都会被记录为一等对象。
+
+**上下文图谱（Context Graph）**
+一张持久化、可查询的图谱，记录智能体知道、决策和推理的一切：实体、关系、决策及其因果关联。`semantica.context` 的核心数据结构。
+
+**决策（Decision）**
+Semantica 中的一等对象：一条被记录的智能体选择，包含类别、场景、推理、结果、置信度分数、因果链和来源溯源。通过 `context.record_decision()` 存储和检索。
+
+**实体（Entity）**
+现实世界中一个可区分的对象或概念：人物、组织、地点、事件或抽象概念。实体是知识图谱中的节点，每个实体都带有类型的属性和来源溯源记录。
+
+**知识图谱（KG）**
+用实体（节点）和关系（边）表示知识的结构化形式。与扁平的向量存储不同，知识图谱支持推理、查询、语义检索和可追溯的推断。
+
+**关系（Relationship）**
+两个实体之间有方向、带类型的连接：例如 `works_for`、`located_in`、`founded_by`。关系携带置信度分数，并可溯源回源文档。
+
+**语义（Semantic）**
+与语言或逻辑中的含义相关。语义理解捕捉上下文和意图——超越关键词匹配，理解文本到底*是什么意思*。
+
+
+## 数据处理
+
+**分块（Chunking）**
+把大文档切分为更小的片段，同时保留语义上下文。Semantica 支持递归、语义边界、实体感知、关系感知、滑动窗口、结构和表格感知等分块策略。
+
+**摄取（Ingestion）**
+从外部来源（文件、数据库、API、流）加载数据，以统一的 `SourceDocument` 进入流水线。每个 Semantica 流水线的第一个阶段。
+
+**规范化（Normalization）**
+把数据标准化为一致的规范形式：把日期转换为 ISO 格式、把实体名称规范化、修复编码问题、去除噪声。确保下游抽取面对的是干净、一致的文本。
+
+**解析（Parsing）**
+从非结构化或半结构化文档（PDF、Word 文件、HTML、PPTX）中抽取结构化文本、版面和元数据。`DoclingParser` 还能处理多栏版式、合并单元格表格和 OCR。
+
+
+## 人工智能
+
+**溯因推理（Abductive Reasoning）**
+为已观测到的事实推断最合理的解释。`semantica.reasoning` 六个推理引擎之一：在现有证据下返回最可能的假设。
+
+**Datalog**
+一种用于知识库查询的声明式逻辑编程语言。Semantica 的 `DatalogEngine` 支持递归 Horn 子句规则，采用自底向上的半朴素不动点语义。v0.4.0 加入。
+
+**GraphRAG（Graph-Augmented Retrieval Augmented Generation，图增强检索增强生成）**
+一种先进的 RAG 方法，将向量相似度检索与知识图谱遍历结合。每个 LLM 响应都立足于结构化图谱上下文，每条论断都可追溯到一个来源节点。消除缺乏来源归因的幻觉。
+
+**推理（Inference）**
+用逻辑规则从已有知识推导出新事实或结论——被推导出的事实并不显式存在于源数据中。
+
+**大语言模型（LLM）**
+在大型文本语料上训练的 AI 模型，能够理解并生成自然语言。Semantica 与 8 家以上的 LLM 提供商集成，用于实体抽取、关系抽取和推理。
+
+**检索增强生成（RAG）**
+一种在生成响应之前先从知识库检索相关上下文，从而增强 LLM 输出的技术。GraphRAG 在此基础上加入图遍历，实现更精确、结构化的检索。
+
+
+## 知识图谱组件
+
+**Allen 区间代数**
+一套由 13 种关系组成的系统，描述两个时间区间如何关联：before、after、meets、overlaps、during、starts、finishes、equals 及其逆关系。`TemporalKnowledgeGraph` 自 v0.4.0 起支持。
+
+**BiTemporalFact**
+带两个独立时间维度的事实：*有效时间*（它在现实世界中何时为真）和*事务时间*（它在系统中何时被记录）。为缓慢变化的数据提供完整审计追踪。
+
+**边（Edge）**
+图中两个节点之间的有向连接，表示一种带类型的关系。边携带类型、置信度分数和溯源元数据。
+
+**节点（Node）**
+知识图谱中表示实体或概念的顶点。节点携带类型的属性、置信度分数，以及链接回源文档的溯源信息。
+
+**属性（Property）**
+实体或关系的属性或特征：名称、日期、URI、置信度分数、来源 URL。
+
+**时序图谱（Temporal Graph）**
+节点和边都带有 `valid_from` / `valid_until` 时间窗口的知识图谱，支持时间点查询和历史状态重建。
+
+**三元组（Triplet）**
+知识的最小单元：一个 `(subject, predicate, object)` 三元组，例如 `(Apple_Inc, founded_by, Steve_Jobs)`。RDF 和基于 SPARQL 的存储的构建基块。
+
+
+## 实体识别与抽取
+
+**指代消解（Coreference Resolution）**
+判断文本中的多个表述何时指向同一实体：例如「Apple」和「这家公司」都指向 Apple Inc.。由 `semantica.semantic_extract` 中的 `CoreferenceResolver` 处理。
+
+**实体消解（Entity Resolution）**
+判断不同文档中的两个实体提及是否指向同一个现实世界实体。也称实体链接或去重。使用相似度评分、blocking 和语义嵌入。
+
+**事件检测（Event Detection）**
+识别并分类文本中的事件：收购、合作、产品发布、监管决策。由 `semantica.semantic_extract` 中的 `EventDetector` 处理。
+
+**命名实体识别（NER）**
+识别文本中的命名实体并将其分类到预定义类别：人物、组织、地点、日期、产品和自定义类型。三种模式：基于模式、基于 ML、基于 LLM。
+
+**关系抽取（Relationship Extraction）**
+从原始文本中识别并抽取实体之间带类型的语义关系：例如 `(Google, acquired, DeepMind)`。
+
+
+## 本体与 Schema
+
+**公理（Axiom）**
+本体中被接受为真的陈述，用于定义逻辑约束：例如「每个 Person 必须有名称」「Organization 同一时间最多有一个 CEO」。
+
+**类（Class）**
+本体中实体的类别或类型：`Person`、`Organization`、`Location`。类构成层级结构，并携带由 SHACL 校验的约束。
+
+**本体（Ontology）**
+对领域概念、关系和约束的形式化规约：通常以 OWL 表达。Semantica 可以从知识图谱自动生成本体，或导入现有的 OWL/RDF/Turtle 文件。
+
+**Ontology Hub**
+Semantica v0.5.0 推出的可视化浏览器 UI，覆盖完整的本体生命周期：可视化类编辑器、SHACL Studio、对齐编写、健康仪表盘和带版本控制的 diff。
+
+**OWL（Web Ontology Language，Web 本体语言）**
+用于定义和实例化本体的 W3C 标准语言。Semantica 可以生成、导入和导出 OWL 本体。
+
+**SHACL（Shapes Constraint Language，形状约束语言）**
+用一组形状约束校验 RDF 图的 W3C 标准。Semantica 从本体自动生成 SHACL 形状（shapes），并据此校验图。
+
+**SKOS（Simple Knowledge Organization System，简单知识组织系统）**
+用于表示受控词表、分类体系和叙词表的 W3C 标准。Semantica 用它进行领域词表管理。
+
+
+## 存储与检索
+
+**嵌入（Embedding）**
+在连续语义空间中表示文本、图像或其他数据的稠密数值向量。含义相近的实体会产生彼此接近的向量——从而支持相似度检索和语义匹配。
+
+**图数据库（Graph Database）**
+针对使用节点和边原语存储、查询图结构数据而优化的数据库。Semantica 支持 Neo4j、FalkorDB、Apache AGE 和 Amazon Neptune。
+
+**混合检索（Hybrid Search）**
+将向量相似度检索与关键词或元数据过滤结合的检索策略：比单独使用任一方法的准确率更高。
+
+**三元组存储（Triplet Store）**
+专门为存储和查询 RDF `(subject, predicate, object)` 三元组而设计的数据库。Semantica 支持嵌入式 Oxigraph，以及 Blazegraph、Apache Jena 和 RDF4J。
+
+**向量存储（Vector Store）**
+针对按相似度存储和搜索高维嵌入向量而优化的数据库。Semantica 支持 FAISS、Pinecone、Weaviate、Qdrant、Milvus 和 PgVector。
+
+
+## 图分析
+
+**中心性（Centrality）**
+衡量节点在图中重要性的指标。常用度量：PageRank（基于链接的重要性）、介数中心性（桥接节点）、接近中心性（到所有其他节点的平均距离）。
+
+**社区检测（Community Detection）**
+识别由密集连接的节点组成的群体：内部链接多于外部链接的簇。用于发现主题社区、欺诈团伙和组织聚类。
+
+**距离带（Distance Band）**
+基于嵌入距离阈值，对节点与目标语义接近程度的分类：`near`、`mid` 或 `far`。距离智能（Distance Intelligence）的一部分（v0.5.0）。
+
+**距离智能（Distance Intelligence）**
+Semantica v0.5.0 推出的语义邻域探索功能：N×N 距离矩阵、以单个实体为中心的 Ego 模式可视化，以及整个图谱的距离带分类。
+
+**PageRank**
+基于入边关系结构衡量节点重要性的算法：最初为网页设计，适用于任何有向图。
+
+
+## 查询语言与标准
+
+**Cypher**
+Neo4j 和 FalkorDB 使用的声明式图查询语言。类似于关系型数据库中的 SQL。
+
+**Datalog**
+Prolog 的一个子集，用于演绎式数据库查询。Semantica 的 `DatalogEngine` 支持递归 Horn 子句规则，通过自底向上的半朴素不动点求值保证终止。
+
+**RDF（Resource Description Framework，资源描述框架）**
+以主语-谓语-宾语三元组形式表示信息的 W3C 标准。是语义网和 Semantica 三元组存储的基础。
+
+**SPARQL**
+面向 RDF 数据的 W3C 查询语言。Semantica 的 `SparqlReasoner` 使用 SPARQL 在 RDF 图上进行基于查询的推理。
+
+
+## 数据质量
+
+**冲突解决（Conflict Resolution）**
+处理同一知识图谱中来自多个来源的矛盾事实。Semantica 的 `ConflictDetector` 会呈现冲突；解决策略包括优先最新、优先最可靠、多数投票和标记待审。
+
+**数据溯源（Data Provenance）**
+关于每条事实的来源、历史和血缘的完整信息：源文档、抽取方法、时间戳、置信度分数。在 Semantica 中符合 W3C PROV-O。
+
+**去重（Deduplication）**
+识别并合并重复的实体记录。Semantica 的 v2 策略（`blocking_v2`、`hybrid_v2`、`semantic_v2`）比 v1 快至 7 倍。
+
+**W3C PROV-O**
+W3C 溯源本体标准。Semantica 以符合 PROV-O 的格式跨所有模块追踪血缘：适用于 HIPAA、SOX、GDPR 和 FDA 21 CFR Part 11 合规。
+
+
+## 安全术语
+
+**SSRF（Server-Side Request Forgery，服务器端请求伪造）**
+一种漏洞：服务器被诱导向非预期的目的地发起请求。Semantica 在构造时校验 `base_url`，以防止 LLM 网关配置中的 SSRF。
+
+**XXE（XML External Entity，XML 外部实体）**
+XML 解析器中的一种漏洞，允许攻击者读取任意文件或触发 SSRF。Semantica 的 `XMLIngestor`（v0.5.0）使用对 XXE 安全的 lxml 后端。
+
+
+## 另见
+
+- [核心概念](concepts)——结合代码示例深入解释关键思想。
+- [快速开始](getting-started)——第一个可运行的示例：无需任何图相关经验。
+- [模块指南](modules)——用代码和流水线链讲解全部 27 个模块。
+- [API 参考](reference/context)——每个类和方法的完整技术参考。

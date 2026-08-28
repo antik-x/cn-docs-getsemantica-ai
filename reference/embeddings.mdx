@@ -1,0 +1,625 @@
+---
+title: "Embeddings 模块"
+description: "文本与图嵌入生成：FastEmbed、Sentence-Transformers、OpenAI、BGE，附带多种池化策略与提供商无关的 API。"
+icon: "vector-square"
+---
+
+**`semantica.embeddings`** 将文本和图结构转换为**稠密向量表示**：
+
+- 提供商无关的 API：FastEmbed（默认，基于 ONNX，无需 GPU）、Sentence-Transformers、OpenAI、BGE
+- 支撑语义检索、实体消解、GraphRAG（Graph-Augmented Retrieval，图增强检索）检索与去重
+- `GraphEmbeddingManager` 为图数据库后端嵌入 KG 节点和边
+- 五种池化（Pooling）策略：Mean（默认）、Max、CLS、Attention、Hierarchical
+- `check_available_providers()` 显示你的环境中安装了哪些后端
+
+
+## 嵌入为何重要
+
+原始文本无法直接进行数学比较。嵌入（Embedding）将语义转化为几何：两个语义相近的句子会生成在高维空间中彼此接近的向量，即使它们不含任何相同的词。
+
+Semantica 将嵌入用于：
+
+- **语义检索**：按含义查找知识图谱（Knowledge Graph）节点，而不仅仅靠关键词
+- **实体消解**：识别出「Apple Inc.」和「Apple Computer」指向的是同一个实体
+- **去重**：`semantic_v2` 策略通过嵌入距离度量实体相似度
+- **GraphRAG 检索**：向量 + 图遍历的混合方式，让大语言模型（LLM）给出有依据的回答
+- **语义分块**：在 `TextSplitter(method="semantic_transformer")` 中检测主题切换边界
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `EmbeddingGenerator` | 提供商无关的入口：负责批处理与提供商选择 |
+| `TextEmbedder` | 文本嵌入，支持自动批处理；默认使用 FastEmbed |
+| `GraphEmbeddingManager` | 为 GraphRAG 与图数据库嵌入 KG 节点和边 |
+| `VectorEmbeddingManager` | 为向量数据库后端准备并格式化嵌入 |
+| `OpenAIStore` | OpenAI `text-embedding-3-small` / `text-embedding-3-large` 提供商 |
+| `BGEStore` | 通过 `sentence-transformers` 使用 BAAI/bge 模型 |
+| `FastEmbedStore` | ONNX 加速的本地嵌入：**无需** CUDA |
+| `LlamaStore` | 占位存储：未达到生产环境可用状态；请勿用于嵌入 |
+| `MeanPooling` | 默认池化策略：最适合检索与聚类 |
+
+## 你将获得
+
+- **EmbeddingGenerator** —— 主入口：提供商无关，自动在所有后端上完成批处理。
+- **TextEmbedder** —— 专用于文本，支持自动批处理与进度跟踪。默认方法为 FastEmbed。
+- **GraphEmbeddingManager** —— 面向图数据库的节点与边嵌入：Neo4j、NetworkX、FalkorDB。
+- **VectorEmbeddingManager** —— 为 FAISS、Weaviate、Qdrant 与 Milvus 准备、规范化并格式化嵌入。
+- **提供商存储** —— `OpenAIStore`、`BGEStore`、`FastEmbedStore` 与 `ProviderStoreFactory`。
+- **池化策略** —— Mean、Max、CLS、Attention 与 Hierarchical：控制 token 到向量的聚合方式。
+
+## 提供商配置
+
+<Tabs>
+  <Tab title="FastEmbed（默认）">
+    ONNX 加速的本地嵌入。无需 GPU，无需 API 密钥。最佳的入门选择。
+
+    ```bash
+    pip install "semantica[fastembed]"
+    ```
+
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    # FastEmbed is the default: no config needed
+    generator = EmbeddingGenerator()
+    embedding = generator.generate_embeddings("Text about AI")
+    ```
+
+    <Check>
+      默认模型为 `BAAI/bge-small-en-v1.5`。零成本、零 GPU，可在任何机器上运行。
+    </Check>
+
+    <Warning>
+      **FastEmbed 会忽略 `device` 参数。** FastEmbed 使用 ONNX Runtime 并自行管理执行提供者：传入 `device="cuda"` 不会产生任何效果。如果需要显式控制 GPU，请改用 `method="sentence_transformers"`。
+    </Warning>
+  </Tab>
+  <Tab title="Sentence-Transformers">
+    通过 HuggingFace 选择丰富的模型。本地运行，无需 API 密钥。
+
+    ```bash
+    pip install semantica  # sentence-transformers included
+    ```
+
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    generator = EmbeddingGenerator(config={
+        "text": {
+            "method": "sentence_transformers",
+            "model_name": "all-MiniLM-L6-v2",
+        }
+    })
+    ```
+
+    常用模型：`all-MiniLM-L6-v2`（快速、小巧）、`all-mpnet-base-v2`（均衡）、`BAAI/bge-large-en-v1.5`（高准确率）。
+
+    <Warning>
+      **序列长度限制。** 大多数 sentence-transformers 模型有 512 个 token 的上限。超出的文本会被静默截断。对于长文档，请使用 `TextSplitter(method="hierarchical")` + `HierarchicalPooling`。
+    </Warning>
+  </Tab>
+  <Tab title="BGE">
+    通过 sentence-transformers 使用 BAAI/bge 模型。检索性能业界领先，本地运行。
+
+    ```bash
+    pip install semantica
+    ```
+
+    ```python
+    from semantica.embeddings import BGEStore, EmbeddingGenerator
+
+    store     = BGEStore(model="BAAI/bge-large-en-v1.5")
+    embedding = store.embed("Text about AI")
+
+    # Or switch model on an existing EmbeddingGenerator
+    generator = EmbeddingGenerator()
+    generator.set_text_model("sentence_transformers", "BAAI/bge-large-en-v1.5")
+    ```
+  </Tab>
+  <Tab title="OpenAI">
+    通过 OpenAI API 获取云端嵌入。质量最高，需要 API 密钥。
+
+    ```bash
+    pip install "semantica[llm-openai]"
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    ```python
+    import os
+    from semantica.embeddings import OpenAIStore
+
+    store = OpenAIStore(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model="text-embedding-3-small",   # or text-embedding-3-large
+    )
+    embedding = store.embed("Text about AI")
+    ```
+
+    | 模型 | 维度 | 最适合 |
+    | :---- | :--------- | :-------- |
+    | `text-embedding-3-small` | 1536 | 高性价比检索 |
+    | `text-embedding-3-large` | 3072 | 对准确率要求最高的工作负载 |
+  </Tab>
+</Tabs>
+
+检查你的环境中安装了哪些提供商：
+
+```python
+from semantica.embeddings import check_available_providers
+
+providers = check_available_providers()
+# → {"sentence_transformers": True, "fastembed": True, "openai": False}
+```
+
+## 入门
+
+`EmbeddingGenerator` 是生成嵌入的最快途径：默认方法为 FastEmbed（基于 ONNX，无需 GPU）：
+
+```python
+from semantica.embeddings import EmbeddingGenerator
+
+# Default: FastEmbed with BAAI/bge-small-en-v1.5
+generator = EmbeddingGenerator()
+
+# Embed a single text
+embedding = generator.generate_embeddings("Text about AI")
+
+# Embed a batch
+embeddings = generator.generate_embeddings(["Text about AI", "Machine learning concepts"])
+
+# Compare two embeddings (cosine similarity: 0.0 to 1.0)
+score = generator.compare_embeddings(embeddings[0], embeddings[1], method="cosine")
+print(f"Similarity: {score:.3f}")
+```
+
+<Tip>
+  **索引和查询务必使用同一个模型。** 不同模型生成的向量不可比较：它们位于不同的向量空间。更换模型需要重新嵌入你的整个语料库。
+</Tip>
+
+如需在构造之后切换提供商：
+
+```python
+# Switch to a sentence-transformers model
+generator.set_text_model("sentence_transformers", "all-MiniLM-L6-v2")
+
+# Switch to BGE large
+generator.set_text_model("sentence_transformers", "BAAI/bge-large-en-v1.5")
+```
+
+## 快速开始
+
+<Steps>
+  <Step title="安装并初始化一个提供商">
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    # Default: FastEmbed, free, runs locally with no GPU
+    generator = EmbeddingGenerator()
+
+    # Use sentence-transformers instead
+    generator = EmbeddingGenerator(config={"text": {"method": "sentence_transformers", "model_name": "all-MiniLM-L6-v2"}})
+    ```
+  </Step>
+  <Step title="生成嵌入">
+    ```python
+    # Single text → 1D array
+    embedding = generator.generate_embeddings("Text about AI")
+
+    # Batch → 2D array (n_texts, dim)
+    embeddings = generator.generate_embeddings(["Text about AI", "Machine learning concepts"])
+    ```
+  </Step>
+  <Step title="计算相似度">
+    ```python
+    # Cosine similarity: 0.0 (unrelated) to 1.0 (identical meaning)
+    score = generator.compare_embeddings(embeddings[0], embeddings[1], method="cosine")
+    print(f"Similarity: {score:.3f}")
+    ```
+  </Step>
+  <Step title="为向量数据库做准备">
+    ```python
+    from semantica.embeddings import VectorEmbeddingManager
+    import numpy as np
+
+    manager = VectorEmbeddingManager()
+
+    embeddings = np.array([...], dtype=np.float32)
+    metadata   = [{"text": "doc 1"}, {"text": "doc 2"}]
+
+    result = manager.prepare_for_vector_db(embeddings, metadata=metadata, backend="faiss")
+    # result["vectors"]  → normalized float32 array
+    # result["ids"]      → ["vec_0", "vec_1", ...]
+    # result["metadata"] → formatted metadata list
+    ```
+  </Step>
+</Steps>
+
+## 支持的模型
+
+| 提供商 | 模型 | 维度 | 速度 | 最适合 |
+| :-------- | :----- | :--------- | :----- | :-------- |
+| `fastembed` | `BAAI/bge-small-en-v1.5` | 384 | 极快 | **默认**：针对 CPU 优化，**无需** GPU |
+| `sentence_transformers` | `all-MiniLM-L6-v2` | 384 | 快 | 速度与质量的良好平衡 |
+| `sentence_transformers` | `all-mpnet-base-v2` | 768 | 中等 | 更高的检索质量 |
+| `sentence_transformers` | `BAAI/bge-large-en-v1.5` | 1024 | 中等 | 业界领先的检索准确率 |
+| `openai` | `text-embedding-3-small` | 1536 | API | 高性价比的 OpenAI 嵌入 |
+| `openai` | `text-embedding-3-large` | 3072 | API | 经由 OpenAI API 获得的最高质量 |
+
+## EmbeddingGenerator
+
+<Tabs>
+  <Tab title="FastEmbed（默认）">
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    # Default: FastEmbed with BAAI/bge-small-en-v1.5
+    generator = EmbeddingGenerator()
+    embeddings = generator.generate_embeddings(texts)
+    similarity = generator.compare_embeddings(embeddings[0], embeddings[1])
+    ```
+
+    **最适合：** 纯 CPU 的生产环境，无 GPU 时延迟最低。默认即可开箱即用。
+  </Tab>
+  <Tab title="Sentence-Transformers">
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    generator = EmbeddingGenerator()
+    generator.set_text_model("sentence_transformers", "all-MiniLM-L6-v2")
+    embeddings = generator.generate_embeddings(texts)
+    ```
+
+    **最适合：** 在有 GPU 可用时获得更高质量的检索，或者需要微调模型时。
+  </Tab>
+  <Tab title="OpenAI">
+    ```python
+    from semantica.embeddings import OpenAIStore
+    import os
+
+    store     = OpenAIStore(api_key=os.getenv("OPENAI_API_KEY"), model="text-embedding-3-small")
+    embedding = store.embed("Hello world")
+    ```
+
+    **最适合：** 追求最高质量（`text-embedding-3-large`），或需要与现有 OpenAI 流水线保持一致。
+  </Tab>
+  <Tab title="GPU 加速">
+    ```python
+    from semantica.embeddings import EmbeddingGenerator
+
+    # Use CUDA via sentence-transformers
+    generator = EmbeddingGenerator(config={"text": {"method": "sentence_transformers", "device": "cuda"}})
+
+    # Apple Silicon (M1/M2/M3)
+    generator = EmbeddingGenerator(config={"text": {"method": "sentence_transformers", "device": "mps"}})
+    ```
+
+    GPU 仅适用于 sentence-transformers。FastEmbed 使用 ONNX，不使用 `device`。
+  </Tab>
+</Tabs>
+
+### 构造参数
+
+| 参数 | 类型 | 默认值 | 描述 |
+| :--------- | :---- | :------- | :----------- |
+| `config` | `dict` | `None` | 配置字典；`config["text"]` 会传递给 `TextEmbedder` |
+| `**kwargs` | | | 合并进 `config` 的其他键值配置 |
+
+使用 `generator.set_text_model(method, model_name)` 在构造之后切换嵌入模型。
+
+## TextEmbedder
+
+直接进行文本嵌入，支持批处理：
+
+```python
+from semantica.embeddings import TextEmbedder
+
+# Default: FastEmbed with BAAI/bge-small-en-v1.5
+embedder = TextEmbedder()
+
+# Single text → 1D array
+embedding = embedder.embed_text("A knowledge graph connects entities with typed relationships.")
+
+# Batch → 2D array (n_texts, dim)
+embeddings = embedder.embed_batch(["First text", "Second text", "Third text"])
+
+# Per-sentence embeddings
+sentence_embeddings = embedder.embed_sentences("First sentence. Second sentence.")
+
+# Get embedding dimension
+dim = embedder.get_embedding_dimension()
+```
+
+### TextEmbedder 构造参数
+
+| 参数 | 类型 | 默认值 | 描述 |
+| :--------- | :---- | :------- | :----------- |
+| `model_name` | `str` | `"BAAI/bge-small-en-v1.5"` | 要加载的模型名称 |
+| `method` | `str` | `"fastembed"` | 嵌入方法：`"fastembed"` 或 `"sentence_transformers"` |
+| `device` | `str` | `"cpu"` | sentence-transformers 所用设备：`"cpu"`、`"cuda"`、`"mps"`。对 FastEmbed 无效。 |
+| `normalize` | `bool` | `True` | 对输出向量做 L2 规范化 |
+
+**关键行为：**
+- 如果 FastEmbed 或 sentence-transformers 不可用，会回退到基于哈希的 128 维嵌入。哈希嵌入是确定性的，但不具备语义：请勿在生产环境中使用。
+- 底层库会在内部将超大批量分块，以避免 OOM。
+
+<Warning>
+  **维度不匹配。** 传给向量存储的维度必须与嵌入模型的输出完全一致：`BAAI/bge-small-en-v1.5` → 384，`all-MiniLM-L6-v2` → 384，`all-mpnet-base-v2` → 768，`BAAI/bge-large-en-v1.5` → 1024。创建存储之前，请先用 `embedder.get_embedding_dimension()` 检查。
+</Warning>
+
+<Tip>
+  **回退嵌入不具备语义。** 如果 FastEmbed 和 sentence-transformers 都加载失败，TextEmbedder 会静默回退到 128 维 SHA-256 哈希嵌入。这类嵌入是确定性的，但不携带任何语义信息。请检查 `embedder.get_method()`：如果返回 `"fallback"`，请安装你想要使用的提供商。
+</Tip>
+
+## 提供商存储
+
+当你需要对单个后端进行细粒度控制时，可以直接使用提供商存储：
+
+```python
+from semantica.embeddings import (
+    OpenAIStore, BGEStore, FastEmbedStore,
+    ProviderStoreFactory,
+)
+import os
+
+# OpenAI
+store     = OpenAIStore(api_key=os.getenv("OPENAI_API_KEY"), model="text-embedding-3-small")
+embedding = store.embed("Hello world")
+
+# BGE (Sentence-Transformers wrapper): pass model_name= not model=
+store     = BGEStore(model_name="BAAI/bge-large-en-v1.5")
+embedding = store.embed("Hello world")
+
+# FastEmbed: ONNX runtime, no CUDA required
+store     = FastEmbedStore(model_name="BAAI/bge-small-en-v1.5")
+embedding = store.embed("Hello world")
+# FastEmbedStore also has an efficient batch method
+embeddings = store.embed_batch(["text1", "text2", "text3"])
+
+# Auto-select from a name string: useful in config-driven pipelines
+# Supported providers: "openai", "bge", "fastembed"
+store = ProviderStoreFactory.create(provider="bge", model_name="BAAI/bge-large-en-v1.5")
+```
+
+<Note>
+  `LlamaStore` 存在于本模块中，但只是一个占位实现：它不连接 Ollama，并且在嵌入时总会抛出 `ProcessingError`。请勿在生产环境中使用。
+</Note>
+
+<Warning>
+  **LlamaStore 不可用。** `LlamaStore` 虽然存在于模块中，但并不连接 Ollama，并且在嵌入时总会抛出 `ProcessingError`。如需本地 ONNX 嵌入，请改用 `FastEmbedStore`；如需基于 sentence-transformers 的本地嵌入，请改用 `BGEStore`。
+</Warning>
+
+## 池化策略
+
+池化将一组嵌入聚合为单个向量：当你有多个文本块（chunk）嵌入需要合并时非常有用：
+
+<Tabs>
+  <Tab title="MeanPooling（默认）">
+    ```python
+    from semantica.embeddings import MeanPooling
+
+    pooler = MeanPooling()
+    pooled = pooler.pool(token_embeddings)   # shape: (hidden_dim,)
+    ```
+
+    **最适合：** 检索、语义检索与聚类：对所有贡献取平均。
+  </Tab>
+  <Tab title="MaxPooling">
+    ```python
+    from semantica.embeddings import MaxPooling
+
+    pooler = MaxPooling()
+    pooled = pooler.pool(token_embeddings)
+    ```
+
+    **最适合：** 捕捉任一特征是否出现：对每个维度取最大激活值。
+  </Tab>
+  <Tab title="CLSPooling">
+    ```python
+    from semantica.embeddings import CLSPooling
+
+    pooler = CLSPooling()
+    pooled = pooler.pool(token_embeddings)
+    ```
+
+    **最适合：** 分类类任务，以及显式使用 CLS 池化训练的模型（BERT）。
+  </Tab>
+  <Tab title="HierarchicalPooling">
+    ```python
+    from semantica.embeddings import HierarchicalPooling
+
+    pooler = HierarchicalPooling()
+    # chunk_size is passed at pool time, not at construction
+    pooled = pooler.pool(token_embeddings, chunk_size=10)
+    ```
+
+    **最适合：** 长文档：先在文本块级别做平均池化，再跨文本块做全局平均池化。
+  </Tab>
+  <Tab title="策略对比">
+
+    | 策略 | 适用场景 |
+    | :-------- | :----------- |
+    | `mean` | 检索、语义检索与聚类的默认选择 |
+    | `max` | 当你想捕捉任一特征是否出现，而非其平均出现程度时 |
+    | `cls` | 分类类任务；显式使用 CLS 池化训练的模型（BERT） |
+    | `attention` | 当 token 重要性差异显著时；速度更慢但更准确 |
+    | `hierarchical` | 含大量文本块的长文档；先做文本块级池化，再做全局池化 |
+
+    ```python
+    from semantica.embeddings import PoolingStrategyFactory
+
+    pooler = PoolingStrategyFactory.create(strategy="mean")
+    ```
+
+  </Tab>
+</Tabs>
+
+## GraphEmbeddingManager
+
+嵌入图节点和边，以便存储到图数据库中：
+
+```python
+from semantica.embeddings import GraphEmbeddingManager
+
+manager = GraphEmbeddingManager()
+
+entities = [
+    {"id": "e1", "text": "Apple Inc.", "type": "Organization"},
+    {"id": "e2", "text": "Tim Cook",   "type": "Person"},
+]
+relationships = [
+    {"source": "e2", "target": "e1", "type": "CEO_OF"}
+]
+
+# Embed entities → dict of {id: np.ndarray}
+node_embeddings = manager.embed_entities(entities)
+
+# Embed relationships → dict of {id: np.ndarray}
+edge_embeddings = manager.embed_relationships(relationships)
+
+# Or prepare everything at once for a graph DB backend
+result = manager.prepare_for_graph_db(entities, relationships, backend="neo4j")
+# result["node_embeddings"] → {id: np.ndarray}
+# result["edge_embeddings"] → {id: np.ndarray}
+# result["nodes"]           → entities with "embedding" field added
+# result["edges"]           → relationships with "embedding" field added
+```
+
+**支持的后端：**`"neo4j"`、`"networkx"`、`"falkordb"`
+
+## VectorEmbeddingManager
+
+为存入向量数据库准备并校验嵌入：
+
+```python
+from semantica.embeddings import VectorEmbeddingManager
+import numpy as np
+
+manager    = VectorEmbeddingManager()
+embeddings = np.random.rand(5, 384).astype(np.float32)
+metadata   = [{"text": f"doc_{i}", "category": "science"} for i in range(5)]
+
+# Prepare for FAISS
+result = manager.prepare_for_vector_db(embeddings, metadata=metadata, backend="faiss")
+# result["vectors"]  → L2-normalized float32 array
+# result["ids"]      → ["vec_0", "vec_1", ...]
+# result["metadata"] → formatted metadata list
+
+# Validate dimensions before insertion
+is_valid = manager.validate_dimensions(embeddings, backend="milvus")
+
+# Prepare multiple batches at once
+combined = manager.batch_prepare([embeddings_a, embeddings_b], backend="qdrant")
+```
+
+**支持的后端：**`"faiss"`、`"weaviate"`、`"qdrant"`、`"milvus"`
+
+## 常见工作流
+
+<Tabs>
+  <Tab title="批量文本嵌入">
+    ```python
+    from semantica.embeddings import TextEmbedder
+
+    embedder = TextEmbedder()   # default: FastEmbed
+
+    texts = [
+        "Apple Inc. was founded by Steve Jobs.",
+        "Microsoft was co-founded by Bill Gates.",
+        "Amazon was started by Jeff Bezos.",
+    ]
+
+    # All at once: more efficient than calling embed_text() per item
+    embeddings = embedder.embed_batch(texts)
+    print(f"Shape: {embeddings.shape}")   # (3, 384)
+    ```
+  </Tab>
+  <Tab title="提供商对比">
+    ```python
+    from semantica.embeddings import check_available_providers, EmbeddingGenerator
+
+    # Check what's installed
+    available = check_available_providers()
+    # → {"sentence_transformers": True, "fastembed": True, "openai": False}
+
+    # Use the fastest available provider
+    generator = EmbeddingGenerator()
+    if available["fastembed"]:
+        generator.set_text_model("fastembed", "BAAI/bge-small-en-v1.5")
+    elif available["sentence_transformers"]:
+        generator.set_text_model("sentence_transformers", "all-MiniLM-L6-v2")
+
+    embeddings = generator.generate_embeddings(texts)
+    ```
+  </Tab>
+  <Tab title="图节点嵌入">
+    ```python
+    from semantica.embeddings import GraphEmbeddingManager
+
+    manager  = GraphEmbeddingManager()
+    entities = [{"id": "n1", "text": "Python"}, {"id": "n2", "text": "Django"}]
+
+    node_embeddings = manager.embed_entities(entities)
+    # {"n1": array([...]), "n2": array([...])}
+    ```
+  </Tab>
+  <Tab title="相似度搜索">
+    ```python
+    from semantica.embeddings import EmbeddingGenerator, calculate_similarity
+    import numpy as np
+
+    generator = EmbeddingGenerator()
+    query     = generator.generate_embeddings("knowledge graph databases")
+    corpus    = generator.generate_embeddings([
+        "graph databases store relationships",
+        "relational databases use tables",
+        "knowledge graphs model entity relationships",
+    ])
+
+    scores = [calculate_similarity(query, doc, method="cosine") for doc in corpus]
+    ranked = sorted(zip(scores, range(len(scores))), reverse=True)
+
+    for score, idx in ranked:
+        print(f"{score:.3f}  {['graph databases store...', 'relational databases...', 'knowledge graphs...'][idx]}")
+    ```
+  </Tab>
+</Tabs>
+
+## 相似度计算
+
+```python
+from semantica.embeddings import calculate_similarity
+
+# Cosine similarity: direction only, not magnitude; most common for text
+score = calculate_similarity(embedding_a, embedding_b, method="cosine")
+# → 0.0 (orthogonal / unrelated) to 1.0 (identical direction)
+
+# Euclidean distance converted to similarity
+score = calculate_similarity(embedding_a, embedding_b, method="euclidean")
+```
+
+## 便捷函数
+
+```python
+from semantica.embeddings import (
+    embed_text, generate_embeddings, calculate_similarity,
+    pool_embeddings, check_available_providers,
+)
+
+# Single text: fastest path
+emb = embed_text("Hello world", method="sentence_transformers")
+
+# Batch
+embs = generate_embeddings(["text1", "text2"], method="default")
+
+# Pool multiple embeddings into one
+pooled = pool_embeddings(embs, method="mean")
+
+# Check which providers are installed
+providers = check_available_providers()
+# → {"sentence_transformers": True, "fastembed": True, "openai": False}
+```
+
+- [向量存储](vector_store)——存储并检索生成的嵌入。
+- [Split](split)——在嵌入之前对文本分块，以获得更好的检索质量。
+- [KG 模块](kg)——距离智能（Distance Intelligence）利用图嵌入构建语义邻域。
+- [Deduplication](deduplication)——语义去重利用嵌入距离进行实体消解。

@@ -1,0 +1,56 @@
+---
+title: "从 kg.ProvenanceTracker 迁移"
+description: "如何从已弃用的 semantica.kg.ProvenanceTracker 迁移到统一的 semantica.provenance.ProvenanceManager。"
+---
+
+## 为何迁移
+
+`semantica.kg.ProvenanceTracker` 已被弃用，并将在未来的主版本中移除。它是一个独立的内存实现，从未委托给统一的溯源（Provenance）后端——`semantica.provenance.ProvenanceManager` 正是该后端，现在是在所有 Semantica 模块中追踪实体与关系溯源的受支持方式（参见[溯源与审计追踪指南](/guides/provenance)）。
+
+`kg.ProvenanceTracker` 上的每个方法在被调用时现在都会发出 `DeprecationWarning`，但在该类被移除之前，现有代码可以原样继续工作——目前还没有强制迁移的最后期限。
+
+## 方法映射
+
+| `kg.ProvenanceTracker` | `ProvenanceManager` 等价方法 | 说明 |
+| --- | --- | --- |
+| `ProvenanceTracker()` | `ProvenanceManager()` | `ProvenanceManager` 还接受 `storage_path=` 以实现 SQLite 持久化，而不止是内存存储。 |
+| `track_entity(entity_id, source, metadata)` | `track_entity(entity_id, source, metadata)` | 调用形式相同。`ProvenanceManager` 还会通过 `parent_entity_id` 自动把每次更新链接到其先前版本。 |
+| `get_all_sources(entity_id)` | `get_all_sources(entity_id)` | 字段名不同：`kg` 追踪器在 `"recorded_at"` 下返回每条记录的时间；`ProvenanceManager` 返回 `"timestamp"`。 |
+| `clear(entity_id=None)` | `clear()` | `ProvenanceManager.clear()` 会清除所有溯源数据；目前尚无按实体清除的功能。 |
+| `query_recorded_between(start, end)` | `query_recorded_between(start, end)` | 调用形式相同；按 `timestamp`（ISO 8601 字符串比较）过滤所有被追踪的条目，而不只是单个实体。 |
+| `revision_history(fact_id)` | `revision_history(fact_id)` | 调用形式与返回形式相同（`version`、`valid_from`、`valid_until`、`recorded_at`、`author`，以及可选的 `revision_type`/`supersedes`）——遍历的是实体的 `previous_version_id` 链，而不是扁平的按实体字典。 |
+| `export_audit_log(fact_ids, format)` | *暂无直接等价方法* | 可基于 `get_lineage()` 的输出构建导出，或序列化 `get_statistics()` 以获得摘要视图。 |
+
+没有直接等价方法的方法不计划在 `kg.ProvenanceTracker` 上重新实现——你需要在调用方代码中写一个小适配器，或者（如果你非常依赖它们）向 `ProvenanceManager` 提功能请求。
+
+## 示例
+
+```python
+# Before
+from semantica.kg import ProvenanceTracker
+
+tracker = ProvenanceTracker()
+tracker.track_entity("entity_1", source="doc_1", metadata={"confidence": 0.9})
+sources = tracker.get_all_sources("entity_1")  # [{"source": ..., "recorded_at": ..., "confidence": 0.9}]
+
+# After
+from semantica.provenance import ProvenanceManager
+
+prov = ProvenanceManager()
+prov.track_entity("entity_1", source="doc_1", metadata={"confidence": 0.9})
+sources = prov.get_all_sources("entity_1")  # [{"source": ..., "timestamp": ..., "metadata": {...}, ...}]
+```
+
+## 迁移期间抑制警告
+
+如果你需要暂时继续使用 `kg.ProvenanceTracker`，并希望在规划切换期间让警告保持静默：
+
+```python
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    tracker = ProvenanceTracker()
+```
+
+这只是权宜之计，不是解决方案——请计划在 `kg.ProvenanceTracker` 被移除之前迁移到 `ProvenanceManager`。

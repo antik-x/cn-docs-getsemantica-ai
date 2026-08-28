@@ -1,0 +1,154 @@
+# 图存储后端与功能矩阵
+
+Semantica 将图谱建模与物理存储分离。LPG 后端通过 `graph_store` 适配器访问；RDF 后端通过 `triplet_store` 适配器访问。
+
+本页刻意保持保守：它会区分适配器是否存在、某功能在该模型下是否已普遍可用，以及后端是否需要用户自行接线。
+
+## 状态标签
+
+- `built-in`：适配器实现已存在于 Semantica 核心中。
+- `tested`：由自动化集成夹具或测试覆盖。
+- `example-only`：存在可用的示例，但其支持未被集成测试所断言。
+- `interface/BYO`：存在接口或集成点；后端接线需自行提供。
+
+## 适配器清单
+
+| 后端 | 模型 | 适配器 | 状态 | 参考 |
+| --- | --- | --- | --- | --- |
+| Neo4j | LPG | `semantica.graph_store.Neo4jStore` | built-in | `cookbook/introduction/09_Graph_Store.ipynb` |
+| FalkorDB | LPG | `semantica.graph_store.FalkorDBStore` | built-in | `docs/reference/graph_store.md` |
+| Amazon Neptune | LPG | `semantica.graph_store.AmazonNeptuneStore` | built-in | `cookbook/introduction/21_Amazon_Neptune_Store.ipynb` |
+| Apache AGE | LPG | `semantica.graph_store.ApacheAgeStore` | built-in | `docs/graph_stores/apache_age.md` |
+| RDF4J | RDF | `semantica.triplet_store.RDF4JStore` | built-in | `cookbook/introduction/20_Triplet_Store.ipynb` |
+| Apache Jena | RDF | `semantica.triplet_store.JenaStore` | built-in | `cookbook/introduction/20_Triplet_Store.ipynb` |
+| Blazegraph | RDF | `semantica.triplet_store.BlazegraphStore` | built-in | `cookbook/introduction/20_Triplet_Store.ipynb` |
+| Anzo | RDF | `semantica.triplet_store.AnzoStore` | built-in | `cookbook/introduction/20_Triplet_Store.ipynb` |
+| Oxigraph | RDF | `semantica.triplet_store.OxigraphStore` | built-in | `docs/reference/triplet_store.md` |
+
+## 功能矩阵
+
+`Yes` 表示该能力预期可与该适配器及图谱模型配合工作。`Partial` 表示该能力在模型特定的约束下可用。`BYO` 表示用户必须为该后端自行提供或验证接线。
+
+| 后端 | 模型 | 摄取 | 上下文图谱构建 | 推理/分析 | 溯源 | 已知限制 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Neo4j | LPG | Yes | Yes | Yes | Partial | 溯源与上下文元数据存储为节点和边的属性；需要关系属性与稳定的节点标识符。 |
+| FalkorDB | LPG | Yes | Yes | Partial | Partial | 基于 Redis；溯源依赖节点/边属性，多图谱隔离取决于所选的图谱名称。 |
+| Amazon Neptune | LPG | Yes | Yes | Partial | Partial | 请使用属性图端点；AWS 认证、VPC 与端点配置可能影响本地测试。溯源依赖节点/边属性。 |
+| Apache AGE | LPG | Yes | Yes | Partial | Partial | 通过 PostgreSQL/AGE 运行；Cypher 兼容性与属性处理可能与独立 LPG 引擎不同。 |
+| RDF4J | RDF | Yes | Partial | Partial | Partial | 上下文分离依赖具名图；三元组级别的溯源可能需要具体化（reification）或图谱级元数据。 |
+| Apache Jena | RDF | Yes | Partial | Partial | Partial | 上下文分离需要具名图；后端配置与事务行为会有影响。 |
+| Blazegraph | RDF | Yes | Partial | Partial | Partial | 上下文请使用四元组/具名图；IRI 稳定性与图谱命名对溯源很重要。 |
+| Anzo | RDF | Yes | Partial | Partial | Partial | Anzo 部署因环境而异；请验证 `dataset_uri`/graphmart 命名、具名图支持与溯源映射。 |
+| Oxigraph | RDF | Yes | Partial | Partial | Partial | 嵌入式单进程存储（内存或磁盘）；支持具名图，但没有可独立扩展的独立服务器进程。 |
+
+## RDF 与 LPG 的差异
+
+- LPG 后端将上下文与溯源存储为图元素和属性。如果后端不支持关系属性，某些溯源模式可能会降级。
+- RDF 后端依赖 IRI、具名图与可选的具体化（reification）。当存储支持具名图/四元组时，上下文图谱与溯源最容易保留。
+- 摄取在两种模型下都可用，但物理表示不同：LPG 直接存储节点/边，而 RDF 存储主语-谓语-宾语语句。
+- 推理与分析应对照适配器的查询能力进行验证，尤其是路径遍历、属性过滤与具名图查询。
+
+## 最小连接示例
+
+要获得可用的配置，请优先参考所引用的 notebook 单元格。下面的示例展示的是各适配器的预期入口，而非通用的连接 DSL。
+
+### Neo4j
+
+```python
+import os
+from semantica.graph_store import Neo4jStore
+
+store = Neo4jStore(
+    uri='bolt://localhost:7687',
+    user='neo4j',
+    password=os.environ['NEO4J_PASSWORD']
+)
+```
+
+### FalkorDB
+
+```python
+from semantica.graph_store import FalkorDBStore
+
+store = FalkorDBStore(
+    host='localhost',
+    port=6379,
+    graph_name='semantica'
+)
+```
+
+### Amazon Neptune
+
+```python
+from semantica.graph_store import AmazonNeptuneStore
+
+store = AmazonNeptuneStore(
+    endpoint='your-neptune-cluster-endpoint',
+    port=8182,
+    region='us-east-1'
+)
+```
+
+### Apache AGE
+
+```python
+from semantica.graph_store import ApacheAgeStore
+
+store = ApacheAgeStore(
+    connection_string='host=localhost dbname=agedb user=postgres password=postgres',
+    graph_name='semantica'
+)
+```
+
+### RDF4J
+
+```python
+from semantica.triplet_store import RDF4JStore
+
+store = RDF4JStore(
+    endpoint='http://localhost:8080/rdf4j-server',
+    repository_id='semantica'
+)
+```
+
+### Apache Jena
+
+```python
+from semantica.triplet_store import JenaStore
+
+store = JenaStore(
+    endpoint='http://localhost:3030/ds'
+)
+```
+
+### Blazegraph
+
+```python
+from semantica.triplet_store import BlazegraphStore
+
+store = BlazegraphStore(
+    endpoint='http://localhost:9999/blazegraph/sparql'
+)
+```
+
+### Anzo
+
+```python
+from semantica.triplet_store import AnzoStore
+
+store = AnzoStore(
+    endpoint='http://anzo-host:8080',
+    dataset_uri='http://cambridgesemantics.com/Graphmart/your-graphmart-id'
+)
+```
+
+### Oxigraph
+
+```python
+from semantica.triplet_store import OxigraphStore
+
+# Omit `path` for an in-memory store; pass a directory for on-disk persistence.
+store = OxigraphStore(path='./semantica-oxigraph-data')
+```
+
+请将主机名、端口、仓库、图谱与凭证替换为你环境中的实际值。对于受监管或自托管的部署，请将凭证保存在环境变量或密钥存储中，而不是源代码里。

@@ -1,0 +1,222 @@
+---
+title: "快速上手"
+description: "面向 AI 的上下文与智能层：将原始数据转化为可解释、可审计的知识图谱。"
+icon: "rocket"
+---
+
+<Tip>
+  已经安装好了？直接前往[快速入门](quickstart)。需要先获得安装方面的帮助？请参阅[安装](installation)。
+</Tip>
+
+## 你可以构建什么
+
+- **GraphRAG（Graph-Augmented Retrieval，图增强检索）系统** —— 让大语言模型（LLM）的回答立足于可追溯的结构化知识。每一条论断都能回链到源节点。
+- **可问责的 AI 智能体** —— 智能体拥有结构化的决策历史、因果链与先例检索。每一个选择都被记录在案、可供审计。
+- **生产环境知识图谱** —— 基于多源数据构建、校验并维护企业级语义知识库。
+- **合规就绪的 AI** —— 每一条事实都带有 W3C PROV-O 溯源（Provenance）。内置 HIPAA、SOX、GDPR、FDA 21 CFR Part 11 合规基础设施。
+
+
+## 3 步完成设置
+
+<Steps>
+  <Step title="安装 Semantica">
+    <CodeGroup>
+
+    ```bash pip (recommended)
+    pip install semantica
+    ```
+
+    ```bash With all extras
+    pip install semantica[all]
+    ```
+
+    ```bash From source
+    git clone https://github.com/semantica-agi/semantica.git
+    cd semantica
+    pip install -e ".[dev]"
+    ```
+
+    </CodeGroup>
+
+    <Check>
+      验证安装：
+      ```python
+      import semantica
+      print(semantica.__version__)  # 0.6.6
+      ```
+    </Check>
+  </Step>
+
+  <Step title="选择你的路径">
+    选择与你要构建的内容相匹配的路线：每条路线都从一个聚焦的 5 分钟示例开始。
+
+    | 路线 | 你想要…… | 从这里开始 |
+    | :----- | :-------------- | :--------- |
+    | **知识图谱** | 把文档变成结构化、可查询的图谱 | [快速入门 → 第 1 步](quickstart) |
+    | **智能体上下文** | 为你的 AI 智能体提供持久记忆与决策追踪 | [Context 参考](reference/context) |
+    | **GraphRAG** | 让 LLM 的回答立足于结构化知识 | [核心概念 → GraphRAG](concepts#graphrag) |
+    | **MCP 集成** | 在 Claude Desktop 或 VS Code 中使用 Semantica | [MCP Server](reference/mcp_server) |
+
+  </Step>
+
+  <Step title="运行流水线">
+    完整的 6 步流水线——摄取、解析、抽取、构建、可视化、导出——见[快速入门](quickstart)。采用基于模式的抽取，5 分钟以内即可完成（无需 API 密钥）。
+
+    <Note>
+      在快速入门中，LLM API 密钥是**可选**的。基于模式的抽取开箱即用：准备好之后，随时可升级到 LLM 抽取以获得更高的准确率。
+    </Note>
+  </Step>
+</Steps>
+
+
+## 选择你的路径
+
+<Tabs>
+  <Tab title="知识图谱">
+    从任意文档或数据源构建结构化的知识图谱（Knowledge Graph）。
+
+    ```python
+    from semantica.ingest import FileIngestor
+    from semantica.parse import DocumentParser
+    from semantica.semantic_extract import NERExtractor, RelationExtractor
+    from semantica.kg import GraphBuilder
+
+    # 1. Ingest
+    sources = FileIngestor().ingest("data/report.pdf")
+
+    # 2. Parse
+    parsed = DocumentParser().parse(sources[0])
+
+    # 3. Extract
+    ner           = NERExtractor(method="pattern")  # no API key needed
+    entities      = ner.extract(parsed)
+    relationships = RelationExtractor().extract(parsed, entities=entities)
+
+    # 4. Build
+    graph = GraphBuilder(merge_entities=True).build(
+        {"entities": entities, "relationships": relationships}
+    )
+    print(f"{len(graph['entities'])} nodes, {len(graph['relationships'])} edges")
+    ```
+
+    **下一步：** [完整流水线演练 →](quickstart)
+  </Tab>
+
+  <Tab title="智能体上下文">
+    为你的智能体提供持久记忆、决策追踪与先例检索。
+
+    ```python
+    from semantica.context import AgentContext, ContextGraph
+    from semantica.vector_store import VectorStore
+
+    context = AgentContext(
+        vector_store=VectorStore(backend="faiss", dimension=768),
+        knowledge_graph=ContextGraph(advanced_analytics=True),
+        decision_tracking=True,
+    )
+
+    # Store a fact with provenance
+    context.store("GPT-4 outperforms GPT-3.5 on reasoning by 40%")
+
+    # Record a decision with full causal chain
+    decision_id = context.record_decision(
+        category="model_selection",
+        scenario="Choose LLM for production pipeline",
+        reasoning="GPT-4 benchmark advantage justifies cost",
+        outcome="selected_gpt4",
+        confidence=0.91,
+    )
+
+    # Search past decisions before making a new one
+    precedents = context.find_precedents("model selection", limit=5)
+    ```
+
+    **下一步：** [Context 模块参考 →](reference/context)
+  </Tab>
+
+  <Tab title="GraphRAG">
+    让 LLM 的每一个回答都立足于你的知识图谱：没有凭空而来的断言。
+
+    ```python
+    from semantica.context import AgentContext, ContextGraph
+    from semantica.vector_store import VectorStore
+
+    context = AgentContext(
+        vector_store=VectorStore(backend="faiss", dimension=768),
+        knowledge_graph=ContextGraph(advanced_analytics=True),
+    )
+
+    # Load your knowledge graph
+    context.load_graph("company_kg.json")
+
+    # Multi-hop GraphRAG query
+    result = context.query(
+        "What companies were founded by people who worked at Apple?",
+        mode="graphrag",
+        reasoning=True,
+    )
+
+    # Every claim links back to a source node
+    for claim in result.claims:
+        print(f"{claim.text}  →  source: {claim.source_node}")
+    ```
+
+    **下一步：** [GraphRAG 概念 →](concepts#graphrag)
+  </Tab>
+
+  <Tab title="MCP 集成">
+    在 Claude Desktop、VS Code、Cursor 或任何模型上下文协议（MCP）客户端中使用 Semantica：完成设置后无需编写任何 Python 代码。
+
+    ```bash
+    pip install semantica
+    ```
+
+    添加到你的 MCP 客户端配置中：
+
+    ```json
+    {
+      "mcpServers": {
+        "semantica": {
+          "command": "semantica-mcp"
+        }
+      }
+    }
+    ```
+
+    立即可用 12 个工具：抽取实体、查询图谱、记录决策、运行推理、导出结果。
+
+    **下一步：** [MCP Server 参考 →](reference/mcp_server)
+  </Tab>
+</Tabs>
+
+
+## 核心架构
+
+Semantica 采用模块化、分层架构：只导入你需要的部分。
+
+- **[输入层](reference/ingest)** —— 从任意来源加载并准备数据。模块：`ingest`、`parse`、`split`、`normalize`
+- **[语义层](reference/semantic_extract)** —— 从原始文本中抽取含义。模块：`semantic_extract`、`kg`、`ontology`、`reasoning`
+- **[存储层](reference/vector_store)** —— 持久化知识以供检索。模块：`embeddings`、`vector_store`、`graph_store`、`triplet_store`
+- **[质量层](reference/deduplication)** —— 校验并去重。模块：`deduplication`、`conflicts`
+- **[上下文层](reference/context)** —— 追踪决策与数据血缘。模块：`context`、`provenance`、`change_management`
+- **[输出层](reference/export)** —— 将结果交付给下游。模块：`export`、`visualization`、`pipeline`、`explorer`
+
+
+## 我需要哪个模块？
+
+参阅[选择合适的模块](choose-your-module)指南——它将 35+ 个开发者目标映射到全部 27 个模块中合适的起点，并为最常见的路径提供可运行的代码。
+
+
+## 后续步骤
+
+- [核心概念](concepts) —— 深入讲解知识图谱、本体（Ontology）与推理。
+- [快速入门教程](quickstart) —— 完整 6 步流水线演练，附可运行代码。
+- [模块参考](modules) —— 逐一讲解每个模块、类与常见链式调用。
+- [API 参考](reference/context) —— 覆盖每个类与方法的完整模块文档。
+
+
+## 帮助
+
+- [Discord](https://discord.gg/sV34vps5hH) —— 提问、分享项目、获得社区支持。
+- [GitHub Issues](https://github.com/semantica-agi/semantica/issues) —— 报告 bug 或请求新功能。
+- [常见问题](faq) —— 解答常见疑问。

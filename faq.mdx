@@ -1,0 +1,353 @@
+---
+title: "常见问题"
+description: "关于 Semantica 的常见问题：安装、功能、集成与故障排除。"
+icon: "circle-question"
+---
+
+<Info>
+  使用 **Ctrl+F** / **Cmd+F** 搜索本页。常用跳转：[安装](#installation) · [数据与功能](#data--features) · [故障排除](#troubleshooting)
+</Info>
+
+## 快速解答
+
+| 问题 | 解答 |
+| :-------- | :------ |
+| 许可证？ | MIT：永久免费，没有付费墙功能 |
+| Python 版本？ | 3.8+（推荐 3.11+） |
+| 需要 API 密钥吗？ | 可选：模式抽取无需任何密钥即可工作 |
+| 能与 LangChain / LlamaIndex 配合使用吗？ | 能：Semantica 是叠加在其上的层，而非替代品 |
+| 可用于生产环境吗？ | 可以：1,000+ 个测试，v0.5.0 包含 12 项安全修复 |
+| 最新版本？ | **v0.6.6**（2026 年 8 月） |
+| 本地 LLM？ | 可以：经 LiteLLM 使用 Ollama，物理隔离环境可用 HuggingFaceLLM |
+
+
+## 一般问题
+
+<AccordionGroup>
+
+<Accordion title="Semantica 是什么？" icon="info-circle">
+
+Semantica 是一个开源框架，用于为 AI 构建上下文图谱（Context Graph）与决策智能层。它把非结构化数据——文档、API、数据库——转化为具有完整溯源（Provenance）追踪的结构化知识图谱（Knowledge Graph），让 AI 系统可解释、可审计。
+
+它不是 LangChain 或 LlamaIndex 的替代品，而是叠加在其上的**问责层**：记录决策、追溯事实来源，让推理过程透明可见。
+
+</Accordion>
+
+<Accordion title="用 Semantica 能构建什么？" icon="hammer">
+
+- 基于文档与多源数据的知识图谱
+- 具备基于图谱的检索与来源归属的 GraphRAG 系统
+- 拥有结构化决策历史与语义记忆的 AI 智能体
+- 带 W3C PROV-O 血缘、满足合规要求的流水线（HIPAA、SOX、GDPR、FDA 21 CFR Part 11）
+- 追踪事实如何随时间变化的时序图谱
+- 由本体驱动、带 SHACL 校验的知识库
+
+</Accordion>
+
+<Accordion title="Semantica 与 LangChain 或 LlamaIndex 有何不同？" icon="scale-balanced">
+
+大多数框架止步于检索或生成。Semantica 增加了一个**问责层**：每个决策都被记录，每条事实都链接到来源，每个推理步骤都可解释。它专为需要审计 AI *为何*得出某个结论（而不仅仅是它说了什么）的环境而设计。
+
+Semantica 与这些框架协同工作，而非与之对抗。
+
+</Accordion>
+
+<Accordion title="Semantica 能解释 LLM 的内部推理或思维链吗？" icon="triangle-exclamation">
+
+不能。这是**系统级可解释性，而非基础模型可解释性**。Semantica 不会暴露、重建或解释 LLM/基础模型*内部*发生了什么——其内部推理或思维链保持不透明，对任何外部系统来说都是如此。
+
+Semantica 解释的是模型*之外*的东西：使用了什么上下文和数据、产生了什么决策、其背后的溯源、相关的关系、所应用的策略，以及由此形成的决策轨迹。
+
+简而言之：Semantica 解释和审计的是 *AI 系统做了什么*——而不是基础模型私有的内部推理。
+
+</Accordion>
+
+<Accordion title="Semantica 免费吗？" icon="tag">
+
+免费：采用 MIT 许可证，无厂商锁定，没有付费墙功能。某些能力需要第三方 API 密钥（例如 OpenAI 嵌入、Groq 推理），但 Semantica 本身永远免费且开源。
+
+</Accordion>
+
+<Accordion title="最新版本是什么？" icon="star">
+
+**v0.5.0**：2026 年 5 月发布。
+
+亮点：Ontology Hub、距离智能、Parquet/XML 摄取、12 项安全修复、Graph Explorer 重新设计、NER 网关修复。
+
+```bash
+pip install --upgrade semantica
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 安装
+
+<AccordionGroup>
+
+<Accordion title="如何安装 Semantica？" icon="download">
+
+```bash
+pip install semantica
+```
+
+虚拟环境配置、可选依赖（`[gpu]`、`[all]`、各提供商专属）以及各平台专属的故障排除，见[安装](installation)。
+
+</Accordion>
+
+<Accordion title="需要什么 Python 版本？" icon="python">
+
+Python **3.8 或更高版本**。为获得最佳性能与兼容性，推荐 Python 3.11+。
+
+</Accordion>
+
+<Accordion title="Windows 上 [all] 可选依赖安装失败" icon="windows">
+
+这是一个已知 bug：已在 **v0.5.0** 中修复。请升级：
+
+```bash
+pip install --upgrade semantica
+```
+
+如果你用的是旧版本，请逐个安装可选依赖：先 `pip install "semantica[core]"`，再添加 `[llm-openai]`、`[gpu]` 等。
+
+</Accordion>
+
+<Accordion title="系统要求是什么？" icon="server">
+
+| 要求 | 最低 | 推荐 |
+| :----------- | :------- | :----------- |
+| Python | 3.8 | 3.11+ |
+| 内存 | 4 GB | 16 GB+ |
+| 存储 | 2 GB | 20 GB+ |
+| GPU | 可选 | 用于嵌入与 ML 模型的 CUDA |
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 数据与功能
+
+<AccordionGroup>
+
+<Accordion title="Semantica 支持哪些数据源？" icon="database">
+
+| 类别 | 来源 |
+| :-------- | :------- |
+| **文件** | PDF、DOCX、HTML、JSON、CSV、Excel、PPTX、Parquet（v0.5.0）、XML（v0.5.0）、归档文件 |
+| **Web** | `WebIngestor` 爬取、RSS 订阅源、站点地图 |
+| **数据库** | 通过 `DBIngestor` / `SnowflakeIngestor` / `DatabricksIngestor` 接入 PostgreSQL、MySQL、Snowflake、Databricks |
+| **NoSQL** | 通过 `MongoIngestor` 接入 MongoDB，通过 `DuckDBIngestor` 接入 DuckDB |
+| **流** | 通过 `StreamIngestor` 进行 Kafka 实时摄取 |
+| **协议** | 通过 `MCPIngestor` 接入 MCP（Model Context Protocol，模型上下文协议） |
+| **云端** | 通过 `GDriveIngestor` 接入 Google Drive，HuggingFace 数据集 |
+
+</Accordion>
+
+<Accordion title="可以使用自己的模型吗？" icon="robot">
+
+可以。Semantica 支持：
+
+- **自定义 NER 与抽取模型**：通过 `method_registry` 注册
+- **自定义嵌入模型**：任何具有 `.encode()` 接口的模型
+- **自定义 LLM 提供商**：通过 LiteLLM（100+ 个模型）或直接集成提供商
+- **自定义流水线处理器**：通过 `PluginRegistry` 注册
+
+</Accordion>
+
+<Accordion title="Semantica 支持 GPU 吗？" icon="bolt">
+
+支持。只要 GPU 可用，就会被自动用于嵌入生成、ML 模型推理与向量运算。安装 GPU 支持：
+
+```bash
+pip install "semantica[gpu]"
+```
+
+其中包含带 CUDA 支持的 PyTorch、FAISS GPU 与 CuPy。
+
+</Accordion>
+
+<Accordion title="Semantica 如何处理大型数据集？" icon="layer-group">
+
+- **分批处理**：以可配置的块大小处理文档，控制内存用量
+- **并行处理**：`Pipeline(workers=N)` 并发运行抽取步骤
+- **增量处理**：新数据到来时增量更新图谱，无需全量重算
+- **持久化后端**：把内存中的 NetworkX 换成 Neo4j、FalkorDB 或 Apache AGE，支撑大规模生产环境图谱
+
+</Accordion>
+
+<Accordion title="什么是时序智能？" icon="clock">
+
+`TemporalKnowledgeGraph` 为节点和边附加 `valid_from` / `valid_until` 时间窗口，支持时间点查询与历史分析。支持全部 13 种 Allen 区间代数关系以及 OWL-Time 导出。
+
+```python
+from semantica.kg import TemporalKnowledgeGraph
+
+tkg = TemporalKnowledgeGraph()
+tkg.add_temporal_triple("A", "caused", "B", valid_from="2024-01", valid_until="2024-06")
+snapshot = tkg.query_at_time("2024-03")
+```
+
+自 v0.4.0 起可用。
+
+</Accordion>
+
+<Accordion title="什么是 Ontology Hub？" icon="sitemap">
+
+一个覆盖本体（Ontology）完整生命周期的可视化浏览器 UI，通过 `semantica.explorer` 启动。包含：
+
+- **可视化编辑器**：创建并编辑类、属性与关系
+- **SHACL Studio**：编写、校验并导出 SHACL shape
+- **对齐编写**：跨本体映射概念
+- **健康度仪表盘**：覆盖率、一致性与约束违例指标
+- **版本控制**：本体变更的差异对比与历史记录
+
+自 v0.5.0 起可用。
+
+</Accordion>
+
+<Accordion title="什么是距离智能？" icon="compass">
+
+对图中任意实体进行语义邻域探索，返回带有距离带分类的结构化邻近数据。
+
+- 一组实体间的 N×N 距离矩阵
+- 以单个节点为中心的 ego 模式可视化
+- 距离带：基于嵌入阈值的 `near` / `mid` / `far`
+- 针对重复查询的嵌入缓存优化
+
+自 v0.5.0 起可用。
+
+</Accordion>
+
+<Accordion title="我的 NER 抽取器在自定义网关上静默回退到 pattern 模式" icon="triangle-exclamation">
+
+已在 **v0.5.0** 中修复。现在，对于不兼容的网关，`response_format=json_object` 参数会被有条件地省略，并自动应用纯 `generate()` 加 JSON 解析的回退方案。请升级以修复：
+
+```bash
+pip install --upgrade semantica
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 技术问题
+
+<AccordionGroup>
+
+<Accordion title="支持哪些图数据库？" icon="diagram-project">
+
+- **Neo4j**：业界标准，Cypher 查询语言
+- **FalkorDB**：Redis 协议，超低延迟
+- **Apache AGE**：PostgreSQL 扩展，OpenCypher
+- **Amazon Neptune**：AWS 托管服务，支持 SPARQL 与 Gremlin
+- **NetworkX**：内存型，适用于开发与小规模图谱
+
+</Accordion>
+
+<Accordion title="支持哪些导出格式？" icon="file-export">
+
+RDF（Turtle、JSON-LD、N-Triples、XML）、Apache Parquet、ArangoDB AQL、Apache Arrow、LPG、CSV、YAML、OWL 本体，以及距离矩阵。
+
+</Accordion>
+
+<Accordion title="支持哪些向量存储？" icon="server">
+
+FAISS、Pinecone、Weaviate、Qdrant、Milvus、PgVector 以及内存型。所有后端共享同一个 `VectorStore` API：改一行代码即可切换。
+
+</Accordion>
+
+<Accordion title="支持哪些 LLM 提供商？" icon="microchip">
+
+Groq、OpenAI、Anthropic、Google Gemini、Ollama（完全本地）、DeepSeek、Novita AI、LiteLLM（通过单一接口使用 100+ 个模型），以及任何 OpenAI 兼容网关。
+
+</Accordion>
+
+<Accordion title="Semantica 可以用于生产环境吗？" icon="shield-check">
+
+可以。v0.5.0 带有：
+
+- 覆盖 Python 3.8–3.12 的 1,000+ 个通过测试
+- `PipelineValidator` 与 `FailureHandler`，支持指数退避和可配置的重试策略
+- 贯穿所有模块的 W3C PROV-O 溯源追踪
+- 带 SHA-256 校验和与完整审计追踪的变更管理
+- 12 项安全漏洞修复：eval 注入、pickle 反序列化、SQL 注入、XXE、SSRF、ReDoS、路径穿越等
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 故障排除
+
+<AccordionGroup>
+
+<Accordion title="ModuleNotFoundError: No module named 'semantica'" icon="xmark-circle">
+
+请确保已激活正确的 Python 环境：
+
+```bash
+pip list | grep semantica
+pip install --upgrade semantica
+```
+
+</Accordion>
+
+<Accordion title="安装时因依赖错误而失败" icon="xmark-circle">
+
+```bash
+pip install --upgrade pip wheel
+pip install semantica
+```
+
+如果 `[all]` 在 Windows 上失败，请改为逐个安装可选依赖。
+
+</Accordion>
+
+<Accordion title="处理过程中内存报错" icon="memory">
+
+减小批次大小、启用流式摄取，或切换到持久化图后端：
+
+```python
+from semantica.graph_store import FalkorDBStore
+store   = FalkorDBStore(host="localhost", port=6379)
+builder = GraphBuilder(merge_entities=True, graph_store=store)
+```
+
+</Accordion>
+
+<Accordion title="嵌入或推理缓慢" icon="gauge-high">
+
+安装 GPU 支持并确认 CUDA 可用：
+
+```bash
+pip install "semantica[gpu]"
+nvidia-smi  # confirm GPU is visible
+```
+
+</Accordion>
+
+<Accordion title="Windows 上 Unicode / cp1252 崩溃" icon="windows">
+
+已在 **v0.5.0** 中修复。请升级，或者对于旧版本设置编码环境变量：
+
+```bash
+pip install --upgrade semantica
+# or for older versions:
+set PYTHONIOENCODING=utf-8
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 支持
+
+- [Discord](https://discord.gg/sV34vps5hH) —— 社区聊天与实时支持。
+- [GitHub Issues](https://github.com/semantica-agi/semantica/issues) —— Bug 报告与功能请求。
+- [参与贡献](contributing-guide) —— 帮助改进 Semantica。

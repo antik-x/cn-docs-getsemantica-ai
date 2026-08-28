@@ -1,0 +1,178 @@
+---
+title: "Snowflake 集成"
+description: "把 Snowflake 表和查询中的结构化数据摄取到 Semantica 的 KG 流水线。"
+icon: "snowflake"
+---
+
+> 以密码、密钥对、OAuth 与 SSO 认证，把 Snowflake 中的数据抽取到 Semantica。
+
+
+## 安装
+
+```bash
+# Install with Snowflake support
+pip install "semantica[db-snowflake]"
+
+# Or install the connector separately
+pip install snowflake-connector-python
+```
+
+
+## 基本用法
+
+```python
+from semantica.ingest import SnowflakeIngestor
+import os
+
+ingestor = SnowflakeIngestor(
+    account=os.getenv("SNOWFLAKE_ACCOUNT"),
+    user=os.getenv("SNOWFLAKE_USER"),
+    password=os.getenv("SNOWFLAKE_PASSWORD"),
+    warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+    database=os.getenv("SNOWFLAKE_DATABASE"),
+    schema=os.getenv("SNOWFLAKE_SCHEMA"),
+)
+
+data = ingestor.ingest_table("CUSTOMERS")
+print(f"Retrieved {data.row_count} rows: columns: {data.columns}")
+```
+
+<Tip>
+使用环境变量（或配合 `python-dotenv` 使用 `.env` 文件），让凭证远离源代码。不带任何参数的 `SnowflakeIngestor()` 会自动从 `SNOWFLAKE_*` 环境变量读取配置。
+</Tip>
+
+
+## 认证方式
+
+<Tabs>
+  <Tab title="密码">
+    ```python
+    ingestor = SnowflakeIngestor(
+        account="myaccount",
+        user="myuser",
+        password="mypassword",
+        warehouse="COMPUTE_WH",
+    )
+    ```
+  </Tab>
+  <Tab title="密钥对（推荐）">
+    ```python
+    ingestor = SnowflakeIngestor(
+        account="myaccount",
+        user="myuser",
+        private_key_path="/path/to/rsa_key.p8",
+        warehouse="COMPUTE_WH",
+    )
+    ```
+    生产环境首选：配置中不存放密码。
+  </Tab>
+  <Tab title="OAuth">
+    ```python
+    ingestor = SnowflakeIngestor(
+        account="myaccount",
+        user="myuser",
+        authenticator="oauth",
+        token="your_oauth_token",
+        warehouse="COMPUTE_WH",
+    )
+    ```
+  </Tab>
+  <Tab title="SSO">
+    ```python
+    ingestor = SnowflakeIngestor(
+        account="myaccount",
+        user="myuser",
+        authenticator="externalbrowser",
+        warehouse="COMPUTE_WH",
+    )
+    ```
+  </Tab>
+</Tabs>
+
+
+## 查询
+
+### 带过滤条件摄取表
+
+```python
+data = ingestor.ingest_table(
+    "CUSTOMERS",
+    where="COUNTRY = 'USA' AND CREATED_DATE > '2024-01-01'",
+    order_by="CREATED_DATE DESC",
+    limit=10000,
+)
+```
+
+### 自定义 SQL
+
+```python
+data = ingestor.ingest_query("""
+    SELECT CUSTOMER_ID, SUM(AMOUNT) AS TOTAL_AMOUNT
+    FROM SALES
+    WHERE DATE >= '2024-01-01'
+    GROUP BY CUSTOMER_ID
+""")
+```
+
+### Schema 自省
+
+```python
+schema = ingestor.get_table_schema("CUSTOMERS")
+for column in schema["columns"]:
+    print(f"{column['name']}: {column['type']}")
+```
+
+
+## 导出为 Semantica 文档
+
+```python
+documents = ingestor.export_as_documents(
+    data,
+    id_field="CUSTOMER_ID",
+    text_fields=["NAME", "EMAIL", "NOTES"],
+)
+print(f"Created {len(documents)} documents for processing")
+```
+
+
+## 批处理大型表
+
+```python
+PAGE_SIZE = 5000
+for page in range(total_pages):
+    data = ingestor.ingest_table(
+        "LARGE_TABLE",
+        limit=PAGE_SIZE,
+        offset=page * PAGE_SIZE,
+    )
+    process_batch(data)
+```
+
+或使用内置的 `batch_size` 参数：
+
+```python
+data = ingestor.ingest_query(
+    "SELECT * FROM LARGE_TABLE",
+    batch_size=5000,
+)
+```
+
+
+## 故障排查
+
+```python
+from semantica.ingest import SnowflakeConnector
+
+connector = SnowflakeConnector(account="myaccount", user="myuser", password="mypassword")
+if not connector.test_connection():
+    print("Connection failed: check credentials and account identifier")
+```
+
+
+## 另请参阅
+
+- [Ingest 模块](../reference/ingest)——完整的 SnowflakeIngestor 及其他所有摄取器。
+- [Databricks 集成](databricks)——Snowflake + Databricks 混合部署环境的配套连接器。
+- [Pipeline](../reference/pipeline)——把 Snowflake 摄取用作流水线的一个步骤。
+- [安装](../installation)——全部可选依赖（extras）。
+- [知识图谱](../reference/kg)——用摄取的 Snowflake 数据构建 KG。

@@ -1,0 +1,292 @@
+---
+title: "Ontology 模块"
+description: "自动化本体生成、SHACL 校验、OWL/RDF 导出、命名空间管理，以及 LLM 驱动的本体生成。"
+icon: "sitemap"
+---
+
+`semantica.ontology` 为知识图谱（Knowledge Graph）Schema 提供完整生命周期：
+
+- 通过 5 阶段流水线（语义网络 → YAML → 类型 → 层级 → TTL）从 KG 数据自动生成本体（Ontology）
+- 通过 `LLMOntologyGenerator` 面向复杂领域进行 LLM 驱动的本体生成
+- SHACL 校验：生成形状（shapes）、校验图谱并获取违规报告
+- 以 Turtle、RDF/XML 与 JSON-LD 格式导出 OWL/RDF
+- `semantica.explorer`（v0.5.0）中提供 Ontology Hub 可视化编辑器
+
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `OntologyEngine` | 协调完整本体生命周期的统一门面 |
+| `OntologyGenerator` | 从 KG 数据自动生成本体（5 阶段流水线） |
+| `LLMOntologyGenerator` | 面向复杂领域的 LLM 驱动本体生成 |
+| `SHACLGenerator` | 从本体或 KG Schema 生成 SHACL 形状 |
+| `OntologyValidator` | 依据 SHACL 形状校验任意图谱：返回 `SHACLValidationReport` |
+| `OWLGenerator` | 将本体序列化为 Turtle、RDF/XML、JSON-LD |
+| `NamespaceManager` | IRI 生成、前缀管理与命名空间绑定 |
+| `OntologyEvaluator` | 覆盖率、完整性与粒度质量指标 |
+| `ClassInferrer` | 从实体类型模式推断类 |
+| `PropertyGenerator` | 从实体属性与关系生成属性 |
+| `AssociativeClassBuilder` | 将 N 元关系建模为中间 OWL 类 |
+
+
+## 入门
+
+**`OntologyEngine`** 是完整本体工作流的主入口：
+
+```python
+from semantica.ontology import OntologyEngine
+
+# Initialize with base URI for your domain
+engine = OntologyEngine(base_uri="https://example.org/ontology/")
+
+# Generate ontology from your knowledge graph data
+ontology = engine.from_data({"entities": entities, "relationships": relationships})
+
+# Validate a graph against the generated SHACL shapes
+report = engine.validate_graph(kg, ontology=ontology)
+if not report.conforms:
+    for v in report.violations:
+        print(f"{v.severity}: {v.message} on {v.focus_node}")
+
+# Export to OWL Turtle
+engine.export_owl(ontology, "ontology.ttl", format="turtle")
+```
+
+## OntologyEngine（统一门面）
+
+**`OntologyEngine`** 协调完整的本体生命周期：**生成、校验、导出与评估**：
+
+```python
+from semantica.ontology import OntologyEngine
+
+engine = OntologyEngine(base_uri="https://example.org/ontology/")
+
+# Generate ontology from KG data
+ontology = engine.from_data({"entities": entities, "relationships": relationships})
+
+# Validate a graph against the generated SHACL shapes
+report = engine.validate_graph(kg, ontology=ontology)
+if not report.conforms:
+    for v in report.violations:
+        print(f"{v.severity}: {v.message} on {v.focus_node}")
+
+# Export to OWL Turtle
+engine.export_owl(ontology, "ontology.ttl", format="turtle")
+```
+
+### OntologyEngine 方法
+
+| 方法 | 描述 |
+| :------ | :----------- |
+| `from_data(data)` | 对实体/关系数据运行 5 阶段流水线 |
+| `validate_graph(kg, ontology=...)` | 依据生成的 SHACL 形状检查知识图谱 |
+| `export_owl(ontology, path, format)` | 序列化为 `"turtle"`、`"xml"` 或 `"json-ld"` |
+| `evaluate(ontology, kg)` | 计算覆盖率、完整性与粒度指标 |
+
+## OntologyGenerator（5 阶段流水线）
+
+**`OntologyGenerator`** 从你的知识图谱实体与关系自动生成形式化本体：
+
+```python
+from semantica.ontology import OntologyGenerator
+
+generator = OntologyGenerator(base_uri="https://example.org/ontology/")
+ontology  = generator.generate_ontology({
+    "entities":      entities,
+    "relationships": relationships,
+})
+```
+
+<Steps>
+  <Step title="语义网络解析">
+    从源数据中的实体类型与关系结构里抽取概念与模式。
+  </Step>
+  <Step title="YAML 到定义">
+    把抽取出的模式转换为中间的类与属性定义。
+  </Step>
+  <Step title="定义到类型">
+    把定义映射到 OWL 构件：`owl:Class`、`owl:ObjectProperty`、`owl:DatatypeProperty`。
+  </Step>
+  <Step title="层级生成">
+    使用传递闭包与环检测构建分类树：产出 `rdfs:subClassOf` 链。
+  </Step>
+  <Step title="TTL 生成">
+    使用 `rdflib` 把最终本体序列化为 Turtle 格式。另可用 RDF/XML 与 JSON-LD。
+  </Step>
+</Steps>
+
+## SHACL 校验
+
+从本体生成 SHACL 形状，并据此校验任意图谱：
+
+```python
+from semantica.ontology import SHACLGenerator, OntologyValidator, SHACLValidationReport, SHACLViolation
+
+# Generate shapes from ontology
+generator  = SHACLGenerator()
+shapes     = generator.generate(ontology)
+shapes_ttl = shapes.serialize(format="turtle")
+
+# Validate a graph against the shapes
+validator = OntologyValidator()
+report: SHACLValidationReport = validator.validate_graph(kg, ontology=ontology)
+
+if not report.conforms:
+    violation: SHACLViolation
+    for violation in report.violations:
+        print(f"{violation.severity}: {violation.message}")
+        print(f"  Node: {violation.focus_node}")
+        print(f"  Path: {violation.result_path}")
+```
+
+### 校验报告字段
+
+| 字段 | 类型 | 描述 |
+| :----- | :---- | :----------- |
+| `conforms` | `bool` | 图谱通过全部 SHACL 约束时为 `True` |
+| `violations` | `List[SHACLViolation]` | 详细的失败记录 |
+| `focus_node` | `str` | 违规图谱节点的 IRI |
+| `result_path` | `str` | 违规属性路径的 IRI |
+| `severity` | `str` | `"Violation"`、`"Warning"` 或 `"Info"` |
+| `message` | `str` | 人类可读的约束失败描述 |
+
+## LLM 驱动的本体生成
+
+适用于难以通过统计方式推断 Schema 模式的复杂或全新领域：
+
+```python
+from semantica.ontology import LLMOntologyGenerator
+
+# Initialize with your preferred LLM provider
+generator = LLMOntologyGenerator(provider="openai")  # or "anthropic", "groq", etc.
+ontology  = generator.generate_ontology_from_text(
+    text="A biomedical ontology for clinical trial protocols involving patients, trials, interventions, and outcomes."
+)
+```
+
+## OWL / RDF 导出
+
+```python
+from semantica.ontology import OWLGenerator
+
+generator = OWLGenerator()
+generator.export_owl(ontology, path="ontology.ttl",  format="turtle")
+generator.export_owl(ontology, path="ontology.owl",  format="xml")
+generator.export_owl(ontology, path="ontology.json", format="json-ld")
+```
+
+## 命名空间管理
+
+```python
+from semantica.ontology import NamespaceManager
+
+ns = NamespaceManager(base_uri="https://example.org/")
+ns.register("ex",     "https://example.org/")
+ns.register("schema", "https://schema.org/")
+ns.register("owl",    "http://www.w3.org/2002/07/owl#")
+
+# Generate IRIs for classes and properties
+class_iri    = ns.generate_class_iri("Person")
+property_iri = ns.generate_property_iri("worksFor")
+```
+
+## 本体评估
+
+度量所生成本体的覆盖率、完整性与粒度：
+
+```python
+from semantica.ontology import OntologyEvaluator
+
+evaluator = OntologyEvaluator()
+result    = evaluator.evaluate_ontology(ontology, kg)
+
+print(f"Class coverage:    {result.class_coverage:.2f}")
+print(f"Property coverage: {result.property_coverage:.2f}")
+print(f"Completeness:      {result.completeness:.2f}")
+print(f"Granularity:       {result.granularity:.2f}")
+
+for gap in result.gaps:
+    print(f"Gap: {gap.description}")
+```
+
+## 常见工作流
+
+<Tabs>
+  <Tab title="快速开始">
+    **用 3 个步骤生成并校验一个本体：**
+
+    ```python
+    from semantica.ontology import OntologyEngine
+
+    # 1. Initialize engine
+    engine = OntologyEngine(base_uri="https://yourcompany.com/ontology/")
+
+    # 2. Generate from your data
+    ontology = engine.from_data({"entities": entities, "relationships": relationships})
+
+    # 3. Validate against a knowledge graph
+    report = engine.validate_graph(kg, ontology=ontology)
+    if report.conforms:
+        print("✓ Graph conforms to ontology")
+    else:
+        print(f"✗ Found {len(report.violations)} violations")
+    ```
+  </Tab>
+  <Tab title="LLM 驱动生成">
+    **从文本描述生成本体：**
+
+    ```python
+    from semantica.ontology import LLMOntologyGenerator
+
+    generator = LLMOntologyGenerator(provider="openai")
+    ontology = generator.generate_ontology_from_text("""
+        Create an e-commerce ontology with products, customers, orders, 
+        categories, reviews, and payment methods.
+    """)
+
+    # Refine with additional constraints
+    engine = OntologyEngine()
+    validated = engine.validate(ontology)
+    ```
+  </Tab>
+  <Tab title="导出与集成">
+    **以多种格式导出本体：**
+
+    ```python
+    from semantica.ontology import OntologyEngine
+
+    engine = OntologyEngine()
+
+    # Export as OWL/Turtle for Protégé
+    engine.export_owl(ontology, "schema.ttl", format="turtle")
+
+    # Export as JSON-LD for web applications
+    engine.export_owl(ontology, "schema.jsonld", format="json-ld")
+
+    # Generate SHACL shapes for validation
+    engine.export_shacl(ontology, "shapes.ttl")
+    ```
+  </Tab>
+</Tabs>
+
+## 摄取已有本体
+
+加载并解析本体文件，供下游使用：
+
+```python
+from semantica.ontology import ingest_ontology
+
+ontology_data = ingest_ontology("schema.ttl")     # Turtle
+ontology_data = ingest_ontology("schema.owl")     # OWL/XML
+ontology_data = ingest_ontology("schema.jsonld")  # JSON-LD
+```
+
+<Note>
+  本体版本管理（`VersionManager`、`OntologyVersion`）已迁移至 `semantica.change_management`。请从那里导入：`from semantica.change_management import VersionManager`。
+</Note>
+
+- [推理](reasoning)——在本体公理之上应用推断规则。
+- [知识图谱](kg)——本体所建模的图谱。
+- [Export](export)——将本体导出为 RDF、OWL 或 JSON-LD。
+- [Conflicts](conflicts)——检测本体约束违规。

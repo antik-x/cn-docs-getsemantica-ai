@@ -1,0 +1,241 @@
+---
+title: "了解更多"
+description: "结构化学习路径、配置参考、故障排除和性能指南。"
+icon: "graduation-cap"
+---
+
+无论你是在运行第一条流水线，还是在生产环境部署 Semantica，本页都为你提供一条清晰的前进路径：从入门到企业级使用。
+
+
+## 学习路径
+
+- **入门（1–2 小时）**——初次接触 Semantica 和知识图谱（Knowledge Graph）。[从安装开始 →](installation)
+- **进阶（4–6 小时）**——已掌握基础，正在构建真实应用。[从模块开始 →](modules)
+- **高级（8+ 小时）**——企业级部署、定制与扩展。[从架构开始 →](architecture)
+
+<Tabs>
+  <Tab title="入门（1–2 小时）">
+    初次接触 Semantica 和知识图谱。无需任何图数据库经验。
+
+    <Steps>
+      <Step title="配置环境">
+        [安装指南](installation)：虚拟环境、可选依赖、特定平台的修复方法。
+      </Step>
+      <Step title="理解核心思想">
+        [核心概念](concepts)：知识图谱是什么、嵌入（Embedding）如何工作、抽取做什么。
+      </Step>
+      <Step title="运行第一个示例">
+        [快速开始](getting-started)：5 分钟代码讲解，使用基于模式的抽取（无需 API key）。
+      </Step>
+      <Step title="构建你的第一个知识图谱">
+        [快速上手教程](quickstart)：从摄取到可视化的完整 6 步流水线。
+      </Step>
+      <Step title="交互式探索">
+        [Welcome to Semantica notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/01_Welcome_to_Semantica.ipynb)：逐一讲解每个模块的 Jupyter 教程。
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="进阶（4–6 小时）">
+    已熟练掌握基础，正在构建真实应用。假设你已完成入门路径。
+
+    <Steps>
+      <Step title="学习每个模块">
+        [模块指南](modules)：全部 27 个模块，附代码示例和常见流水线链。
+      </Step>
+      <Step title="构建生产级知识图谱">
+        [Building Knowledge Graphs notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/07_Building_Knowledge_Graphs.ipynb)：多来源、去重、冲突解决。
+      </Step>
+      <Step title="添加语义检索">
+        [Embeddings notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/09_Embeddings.ipynb)：提供商、池化策略、向量存储。
+      </Step>
+      <Step title="多来源集成">
+        [Multi-Source Data Integration notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/06_Multi_Source_Data_Integration.ipynb)，了解多来源模式。
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="高级（8+ 小时）">
+    企业级部署、定制与扩展。假设你具备生产环境使用经验。
+
+    <Steps>
+      <Step title="理解架构">
+        [架构指南](architecture)：四层设计、扩展点和设计决策。
+      </Step>
+      <Step title="时序智能">
+        [Temporal Graphs notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/10_Temporal_Knowledge_Graphs.ipynb)：`valid_from`/`valid_until`、Allen 区间代数、时间点查询。
+      </Step>
+      <Step title="本体驱动的知识库">
+        [Ontology notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/introduction/14_Ontology.ipynb)：自动生成、SHACL 校验、Ontology Hub（v0.5.0）。
+      </Step>
+      <Step title="高级可视化">
+        [Complete Visualization Suite notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/03_Complete_Visualization_Suite.ipynb)：UMAP、t-SNE、社区布局、嵌入投影。
+      </Step>
+      <Step title="企业级导出">
+        [Multi-Format Export notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/05_Multi_Format_Export.ipynb)：带 PROV-O 的 RDF、Parquet、Neo4j Cypher、Arrow、OWL。
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+
+## 配置参考
+
+所有设置都可以用环境变量覆盖：无需修改代码。
+
+| 设置 | 环境变量 | 默认值 |
+| :------- | :-------------------- | :------- |
+| OpenAI API key | `OPENAI_API_KEY` | `None` |
+| Groq API key | `GROQ_API_KEY` | `None` |
+| Anthropic API key | `ANTHROPIC_API_KEY` | `None` |
+| 嵌入提供商 | `SEMANTICA_EMBEDDING_PROVIDER` | `"openai"` |
+| 图后端 | `SEMANTICA_GRAPH_BACKEND` | `"networkx"` |
+| 日志级别 | `SEMANTICA_LOG_LEVEL` | `"INFO"` |
+| 日志格式 | `SEMANTICA_LOG_FORMAT` | `"text"` |
+
+
+## 故障排除
+
+<AccordionGroup>
+
+<Accordion title="ModuleNotFoundError: No module named 'semantica'" icon="circle-xmark">
+
+确认安装无误，且激活的是正确的 Python 环境：
+
+```bash
+pip list | grep semantica
+pip install --upgrade semantica
+```
+
+如需可选功能，安装相应的 extra：
+
+```bash
+pip install "semantica[llm-openai]"   # OpenAI provider
+pip install "semantica[gpu]"          # GPU acceleration
+```
+
+</Accordion>
+
+<Accordion title="AuthenticationError" icon="lock">
+
+把你的 API key 设置为环境变量——永远不要把密钥硬编码在源文件里：
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export GROQ_API_KEY="gsk_..."
+```
+
+</Accordion>
+
+<Accordion title="MemoryError 或 OOM 崩溃" icon="memory">
+
+从默认的内存型 NetworkX 后端切换到持久化图数据库：
+
+```python
+from semantica.graph_store import FalkorDBStore
+from semantica.kg import GraphBuilder
+
+store   = FalkorDBStore(host="localhost", port=6379)
+builder = GraphBuilder(merge_entities=True, graph_store=store)
+```
+
+对大型语料，还应减小批量大小并启用流式摄取。
+
+</Accordion>
+
+<Accordion title="大型数据集上处理缓慢" icon="gauge">
+
+启用并行执行和 GPU 加速：
+
+```python
+from semantica.pipeline import Pipeline
+
+pipeline = Pipeline(workers=8, batch_size=32)
+pipeline.run(sources)
+```
+
+```bash
+pip install "semantica[gpu]"  # CUDA-backed embeddings
+```
+
+</Accordion>
+
+<Accordion title="Windows 上 [all] 安装失败" icon="windows">
+
+已在 **v0.5.0** 中修复。升级即可：
+
+```bash
+pip install --upgrade semantica
+```
+
+或者逐个安装 extra：`pip install "semantica[core]"`，然后按需添加 `[llm-openai]`、`[gpu]` 等。
+
+</Accordion>
+
+<Accordion title="Windows 上的 cp1252 编码崩溃" icon="windows">
+
+已在 **v0.5.0** 中修复。对更早的版本，设置编码环境变量：
+
+```bash
+set PYTHONIOENCODING=utf-8
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 性能优化
+
+<AccordionGroup>
+
+<Accordion title="后端选择：开发环境 vs. 生产环境" icon="server">
+
+| 操作 | NetworkX（默认） | Neo4j / FalkorDB |
+| :--------- | :------------------ | :---------------- |
+| 图构建 | 快 | 中等 |
+| 查询性能 | 中等 | 快 |
+| 可扩展性 | 仅内存 | 持久化、生产级规模 |
+| 推荐用途 | 开发、小型图谱 | 生产环境、大型语料 |
+
+本地开发和原型验证使用 NetworkX。部署到生产环境之前，切换到持久化后端。
+
+</Accordion>
+
+<Accordion title="大型语料的批量处理" icon="layer-group">
+
+按批处理文档，而不是一次处理一个。根据可用内存配置 `chunk_size`：在 16 GB 内存的机器上，每批 1,000 个文档是一个不错的起点。
+
+```python
+from semantica.pipeline import Pipeline
+
+pipeline = Pipeline(workers=8, batch_size=32)
+pipeline.run(sources)
+```
+
+</Accordion>
+
+<Accordion title="去重 v2：快至 7 倍" icon="bolt">
+
+如果去重是瓶颈，从 v1 策略切换到 v2 引擎：
+
+```python
+resolver = EntityResolver()
+merged   = resolver.resolve(entities, strategy="semantic_v2")  # up to 7x faster
+```
+
+`blocking_v2`、`hybrid_v2` 和 `semantic_v2` 策略在相似度评分之前先做候选 blocking，从而减少 O(n²) 次比较。
+
+</Accordion>
+
+</AccordionGroup>
+
+
+## 安全最佳实践
+
+- **API key**：保存在环境变量或密钥管理器中；绝不提交到版本控制；定期轮换
+- **敏感数据**：对 PII 或涉密内容使用本地嵌入模型（Ollama、HuggingFace）；在没有数据处理协议的情况下，避免把敏感数据发送给外部 API
+- **图谱导出**：对敏感导出进行静态加密；配置自定义 LLM 网关时，使用 v0.5.0 的防 SSRF `base_url` 校验
+- **XML 摄取**：始终使用 `XMLIngestor`（v0.5.0），它使用对 XXE 安全的 lxml 后端；绝不用标准库解析器解析不受信任的 XML
+
+- [Cookbook](cookbook)——从入门到高级的交互式 Jupyter notebook。
+- [FAQ](faq)——常见问题解答。
+- [API 参考](reference/core)——完整技术文档。

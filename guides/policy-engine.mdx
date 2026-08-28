@@ -1,0 +1,670 @@
+---
+title: "策略引擎"
+description: "针对知识图谱决策定义、版本化并执行治理策略——支持合规检查、违规追踪、影响分析与多级审批工作流。"
+icon: "scale-balanced"
+---
+
+## 什么是策略引擎？
+
+策略评估（Policy Evaluation）是指依据预先定义的治理规则与约束，对决策进行系统性检查。与应用强制执行会自动阻止不合规动作不同，策略评估提供的是合规状态，可以据此触发不同的工作流——审批流程、例外处理或审计要求。
+
+**关键策略概念：**
+
+**策略评估**检查决策是否满足既定标准，但不会自动阻止动作，从而支持灵活的治理工作流。
+
+**治理与合规工作流**利用策略评估的结果，把决策路由到相应的审批链、例外流程或审计追踪之中。
+
+**审批流程**可以由策略违规触发，创建留有书面记录的例外路径，包含理由说明与审批者的问责。
+
+**与强制执行的区别：**策略评估返回合规状态（`True`/`False`），但不会自动阻止动作。接下来发生什么由你的工作流决定——立即批准、升级上报、例外处理或拒绝。
+
+## 为什么使用策略引擎？
+
+**治理与问责。**创建可审计的决策工作流：每一次策略评估、例外与审批都永久记录在知识图谱中，并带有完整的溯源追踪。
+
+**合规核验。**在决策最终定案或付诸行动之前，依据监管要求、内部策略与风险管理规则对它们进行系统性检查。
+
+**审批工作流编排。**把不合规的决策送入结构化的审批流程，附带书面理由与多级签署。
+
+**监管合规。**维护完整的策略版本历史、例外记录与合规检查轨迹，供监管机构检查，从而满足审计要求。
+
+**风险管理。**标记高风险决策以接受额外审查，同时让常规的合规决策以最小阻力继续推进。
+
+**策略演进追踪。**为策略变更维护带影响分析的版本历史，支持基于证据的策略完善与监管报告。
+
+## 何时使用 / 何时不用
+
+**策略引擎适用于：**
+- 需要结构化审批流程与审计追踪的治理工作流
+- 要求策略遵循情况可记录、可验证的监管合规
+- 面向高风险决策的多级审批工作流（财务审批、安全例外、临床治疗）
+- 策略违规会触发特定升级程序的受监管环境
+- 不合规决策需要额外监督的风险管理工作流
+- 要求完整策略应用与例外追踪的审计要求
+
+**不要将策略引擎用于：**
+- 简单的表单校验或基本输入检查——请改用标准校验库
+- 不需要审计追踪或治理工作流的基础业务规则
+- 低风险、高吞吐的检查——策略评估的开销会影响性能
+- 无需版本追踪与审批流程增益的确定性规则检查
+- 策略评估延迟不可接受的实时运营决策
+
+**警告：**策略引擎会增加治理开销，并且需要精心设计的工作流。只有当结构化策略管理的收益超过额外的复杂性时才使用它。
+
+`PolicyEngine` 依据已记录的决策强制执行具名策略，如果决策满足全部策略规则则返回 `True`。用它在运行时为 AI 决策把关——需要双源确认的归因、需要资深人员批准的升级事项，或任何必须在结果被记录之前核验合规性的决策类别。策略本身是带版本的图节点，因此每一次检查、例外与审批链都是永久审计追踪的一部分。
+
+<Info>
+策略引擎位于 `AgentContext` 与 `ContextGraph` 之上。策略作为节点存储在决策所在的同一张图中，因而享有与其他任何知识图谱实体相同的因果追踪、溯源与时序有效性。
+
+**关键对象：**`PolicyEngine` 和 `Policy` 从 `semantica.context` 导入。`Decision` 是一个数据类，包含 `decision_id`、`category`、`scenario`、`reasoning`、`outcome`、`confidence`、`timestamp`、`decision_maker` 与 `metadata` 等字段。`DecisionRecorder` 从 `semantica.context.decision_recorder` 导入，用于审批工作流追踪。
+</Info>
+
+## 支持的规则类型
+
+PolicyEngine 的实现支持特定的规则模式，用于评估决策属性与元数据：
+
+**置信度规则：**
+- `min_confidence: 0.85` — `decision.confidence >= 0.85`
+
+**结果校验：**
+- `allowed_outcomes: ["approved", "approved_with_conditions"]` — `decision.outcome` 必须在该列表中
+
+**类别校验：**
+- `required_categories: ["credit_risk", "operational_risk"]` — `decision.category` 必须在该列表中
+
+**元数据字段规则：**
+- `min_*: value` — 元数据字段必须 `>= value`（例如 `min_credit_score: 680`）
+- `max_*: value` — 元数据字段必须 `<= value`（例如 `max_ltv: 0.85`）
+- `required_*: value` — 元数据字段必须等于 `value`（字符串）或包含全部项（列表）
+
+**字段查找行为：**对于规则 `min_credit_score`，引擎会先检查 `metadata["credit_score"]`，再检查 `metadata["*_credit_score"]`（后缀匹配），最后检查 `decision.credit_score` 属性。
+
+**重要：**以下规则类型不受支持，会导致意外行为：
+- `disallowed_outcomes`（请改用 `allowed_outcomes`）
+- `mandatory_fields`（针对具体字段请使用 `required_*`）
+- `requires_mfa`（请使用 `required_mfa_verified` 这类元数据字段检查）
+- 复杂的嵌套条件或运算符
+
+---
+
+## 定义策略
+
+`Policy` 是一个带有自由形式 `rules` 字典的数据类——使用受支持的规则模式，编码你的领域所需的任何内容。
+
+```python
+from semantica.context import ContextGraph, PolicyEngine, Policy
+from datetime import datetime
+
+graph  = ContextGraph()
+engine = PolicyEngine(graph_store=graph)
+
+attribution_policy = Policy(
+    policy_id   = "pol-attr-001",
+    name        = "Nation-State Attribution — Dual Source + Senior Approval",
+    description = (
+        "Attributions to nation-state actors require corroboration from two independent "
+        "intelligence sources and explicit senior analyst approval before being recorded "
+        "in the authoritative graph."
+    ),
+    rules = {
+        "min_independent_sources":  2,
+        "required_approver_role":   "senior_analyst",
+        "allowed_outcomes":         ["nation_state_attributed_dual_source"],
+        "min_confidence":           0.85,
+        "required_source_a":        True,
+        "required_source_b":        True,
+        "required_approver":        True,
+    },
+    category   = "threat_attribution",
+    version    = "1.0.0",
+    created_at = datetime.utcnow(),
+    updated_at = datetime.utcnow(),
+)
+
+policy_id = engine.add_policy(attribution_policy)
+print(f"Policy registered: {policy_id}")
+# Policy registered: pol-attr-001
+```
+
+这条策略现在是图中的一个节点。它拥有版本字符串、创建时间戳，以及一个 `rules` 字典——合规检查器在依据它评估决策时会读取这个字典。
+
+---
+
+## 检查决策的合规性
+
+`check_compliance` 接受一个 `Decision` 对象和策略 ID，返回一个布尔值。
+
+```python
+from semantica.context import Decision
+
+# The AI analyst's APT29 attribution — only one source cited, no senior approval yet
+decision = Decision(
+    decision_id   = "",                        # auto-generated if left empty
+    category      = "threat_attribution",
+    scenario      = "APT29 activity cluster in NATO network telemetry Q2 2025",
+    reasoning     = (
+        "Observed TTPs match APT29 historical patterns: HAMMERTOSS C2, "
+        "spear-phishing via OneDrive lure, targeting foreign ministry staff. "
+        "Single source: internal SIEM telemetry."
+    ),
+    outcome       = "nation_state_attributed_single_source",
+    confidence    = 0.91,
+    timestamp     = datetime.utcnow(),
+    decision_maker= "ai_threat_analyst_v3",
+    metadata      = {
+        "independent_sources": 1,  # Below min_independent_sources requirement
+        "approver_role": "analyst",  # Below required_approver_role
+        "source_a": True,  # Has first source
+        # Missing source_b and approver fields
+    }
+)
+
+is_compliant = engine.check_compliance(decision, policy_id)
+print(f"Compliant: {is_compliant}")
+# Compliant: False
+#
+# Multiple rule violations:
+# - outcome "nation_state_attributed_single_source" not in allowed_outcomes
+# - independent_sources (1) < min_independent_sources (2)
+# - approver_role "analyst" != required_approver_role "senior_analyst"
+# - missing required_source_b and required_approver fields
+```
+
+引擎返回 `False`。该决策并没有被拒绝——而是被标记了出来。接下来发生什么取决于你的工作流。在一些组织中，不合规的结果会直接阻止向权威图谱写入；在另一些组织中，它会触发一个例外流程，由人工审批者审查证据并签署确认。
+
+---
+
+## 记录策略例外
+
+`record_exception` 会永久地把一个决策、它所违反的策略、审批者身份以及理由关联在一起。
+
+```python
+exception_id = engine.record_exception(
+    decision_id  = decision.decision_id,
+    policy_id    = policy_id,
+    reason       = "Time-sensitive attribution — protective action required before second source available",
+    approver     = "sr_analyst_chen",
+    justification= (
+        "Senior analyst reviewed SIEM telemetry and concurs with TTP matching. "
+        "Exception approved under Emergency Attribution Procedure §3.2. "
+        "Second source corroboration to be completed within 72 hours."
+    ),
+)
+
+print(f"Exception recorded: {exception_id}")
+# Exception recorded: exc-pol-attr-001-20250621-001
+#
+# The exception node is linked to both the decision and the policy in the graph,
+# creating a permanent three-way provenance link: decision → exception → policy.
+```
+
+---
+
+## 构建多级审批链
+
+对于风险最高的决策——即将与政府合作伙伴共享的正式归因报告——单一审批者并不足够。需要三个人签署：团队负责人、部门主管和 CISO。`DecisionRecorder.record_approval_chain` 在一次调用中记录全部三人，并把每位审批者与其签署的沟通方式和情境关联起来。
+
+```python
+from semantica.context.decision_recorder import DecisionRecorder
+
+recorder = DecisionRecorder(graph_store=graph)
+
+# approvers, methods, and contexts must be equal-length parallel lists
+recorder.record_approval_chain(
+    decision_id = decision.decision_id,
+    approvers   = ["team_lead_okonkwo",  "dept_head_zhang",    "ciso_miller"],
+    methods     = ["slack_dm",            "zoom_call",           "email"],
+    contexts    = [
+        "Team lead reviewed TTPs and SIEM evidence",
+        "Dept head approved sharing with Five Eyes partners",
+        "CISO authorised formal nation-state attribution report",
+    ],
+)
+
+print("Three-level approval chain recorded")
+# The graph now carries a directed approval chain:
+#   decision → team_lead_okonkwo → dept_head_zhang → ciso_miller
+# Each link is stamped with method and context for Inspector General review.
+```
+
+---
+
+## 更改策略前的 what-if 影响分析
+
+六个月后，你的威胁情报负责人想收紧这条策略：把最低置信度阈值从 0.85 提高到 0.92，以减少误报的归因。在更新策略之前，她想知道在更严格的规则下，有多少过去的决策会被拦下。
+
+`analyze_policy_impact` 会对历史决策记录运行一次 what-if 模拟——不会做任何永久性更改。
+
+```python
+current_policy = engine.get_policy(policy_id)
+
+impact = engine.analyze_policy_impact(
+    policy_id      = policy_id,
+    proposed_rules = {**current_policy.rules, "min_confidence": 0.92},
+)
+
+print(f"Decisions affected by raising confidence floor to 0.92: {impact.get('affected_decisions', 0)}")
+# Decisions affected by raising confidence floor to 0.92: 4
+#
+# Four past attributions had confidence between 0.85 and 0.92.
+# Under the new rule, all four would have required exceptions.
+# The lead can now make an evidence-based choice: is that trade-off acceptable?
+```
+
+影响字典包含逐决策的细节，而不仅是数量。你可以查看具体哪些归因决策会受到影响、审阅它们的推理，并判断收紧阈值是否值得。
+
+---
+
+## 更新策略并找出受影响的决策
+
+负责人决定继续执行这次阈值上调。她把策略更新到 1.1.0 版本，并记录下自己的理由。旧版本则保留在历史中。
+
+```python
+engine.update_policy(
+    policy_id     = policy_id,
+    rules         = {**current_policy.rules, "min_confidence": 0.92},
+    change_reason = "Q3 attribution quality review — raise confidence floor from 0.85 to 0.92 "
+                    "to reduce false-positive nation-state attributions",
+    new_version   = "1.1.0",
+)
+
+print(f"Policy updated: {policy_id} to version 1.1.0")
+# Policy updated: pol-attr-001 to version 1.1.0
+
+# Find all decisions that were evaluated under v1.0.0 —
+# these need to be re-reviewed to confirm they still meet the new standard.
+affected = engine.get_affected_decisions(
+    policy_id    = policy_id,
+    from_version = "1.0.0",
+    to_version   = "1.1.0",
+)
+
+print(f"Decisions to re-audit: {len(affected)}")
+for dec in affected:
+    print(f"  {dec.get('decision_id')}  confidence={dec.get('confidence')}  outcome={dec.get('outcome')}")
+# decision-a3f1  confidence=0.87  outcome=nation_state_attributed
+# decision-b22c  confidence=0.89  outcome=nation_state_attributed
+# ...
+```
+
+这就是复审工作流：旧策略下做出的每个决策都会被找出来，依据新标准审查，然后要么重新确认，要么标记待修正。图谱会保留完整历史，记录每个决策由哪个策略版本所辖。
+
+---
+
+## 查看完整的审计追踪
+
+任何时候——无论是督察长审查、董事会报告，还是事件调查——你都可以检索某条策略的完整版本历史。
+
+```python
+history = engine.get_policy_history(policy_id)
+
+print(f"Policy versions on record: {len(history)}")
+for version in history:
+    print(f"  v{version.version}  updated={version.updated_at.date()}  rules_keys={list(version.rules.keys())}")
+# v1.0.0  updated=2025-06-21  rules_keys=[min_independent_sources, required_approver_role, ...]
+# v1.1.0  updated=2025-09-14  rules_keys=[min_independent_sources, required_approver_role, ...]
+#
+# The full rules dict for each version is preserved — you can replay exactly
+# what the compliance check would have returned for any past decision against
+# any past version of the policy.
+```
+
+---
+
+## 常见陷阱
+
+**以为合规失败会自动阻止动作。**PolicyEngine 返回合规状态，但不会自动阻止动作。你的工作流必须检查返回的布尔值，并决定下一步——批准、拒绝、例外处理还是升级上报。
+
+**使用不受支持的规则键。**实现只支持特定模式：`min_*`、`max_*`、`required_*`、`min_confidence`、`allowed_outcomes` 与 `required_categories`。任何其他规则键都会退化为键存在性检查：只有当那个确切的键存在于 `decision.metadata` 中时才会通过，而无论其取值如何。这意味着诸如 `disallowed_outcomes` 这样的键，只要元数据中不存在这个字面键（这是常见情形），就会静默地**未通过**合规；而如果元数据中恰好存在一个带任意取值的 `disallowed_outcomes` 键，它又会静默地**通过**——无论实际结果如何。这两种行为都不符合「结果不得在此列表中」的本意——请改用 `allowed_outcomes`。
+
+**把例外当作批准。**用 `record_exception()` 记录策略例外，并不会自动让不合规的决策变为合规。例外只是审计追踪条目——你的工作流仍须决定是否继续执行该不合规决策。
+
+**以为 PolicyEngine 会自动修改图状态。**PolicyEngine 只评估合规性，并记录策略应用、例外与审批链。它不会修改决策结果或元数据，也不会阻止动作——那是你的工作流的职责。
+
+**使用复杂的嵌套规则结构。**实现不支持复杂的条件逻辑、嵌套运算符或任意表达式。保持规则简单：只做单字段比较、列表成员检查和阈值校验。
+
+**缺少规则评估所需的元数据。**`min_credit_score` 这类规则要求相应的元数据字段（`credit_score`）存在于 `decision.metadata` 中。元数据字段缺失会导致规则评估失败，使决策不合规。
+
+**忘记检查规则评估结果。**始终显式处理合规与不合规两种情形。不合规的决策若在没有妥善例外处理的情况下继续推进，会造成审计缺口与治理风险。
+
+---
+
+## 领域示例
+
+<Tabs>
+
+<Tab title="国防 — CTI/威胁">
+
+TLP:RED 情报未经指挥官级批准，绝不可在原发组织之外共享。这条策略强制作用于每一个涉及涉密威胁报告的信息共享决策。违规会被路由给 J2 军官做例外审查，而不是被静默记录了事。
+
+```python
+from semantica.context import ContextGraph, PolicyEngine, Policy, Decision
+from semantica.context.decision_recorder import DecisionRecorder
+from datetime import datetime
+
+graph    = ContextGraph()
+engine   = PolicyEngine(graph_store=graph)
+recorder = DecisionRecorder(graph_store=graph)
+
+opsec_policy = Policy(
+    policy_id   = "pol-opsec-001",
+    name        = "TLP:RED — Restricted Dissemination",
+    description = "TLP:RED intelligence must not be shared outside the originating organisation",
+    rules = {
+        "required_classification":      "TLP:RED",
+        "allowed_outcomes":             ["retained_internal", "escalated_internal"],
+        "min_confidence":               0.95,
+        "required_tlp":                 True,
+        "required_authorised_recipients": True,
+    },
+    category   = "information_sharing",
+    version    = "2.1.0",
+    created_at = datetime.utcnow(),
+    updated_at = datetime.utcnow(),
+)
+engine.add_policy(opsec_policy)
+
+decision = Decision(
+    decision_id   = "",
+    category      = "information_sharing",
+    scenario      = "APT29 SIGINT report TLP:RED — share with Five Eyes partners?",
+    reasoning     = "Tactical intelligence — partner request via UKIC liaison",
+    outcome       = "shared_with_partner",   # violates allowed_outcomes policy
+    confidence    = 0.88,                    # below min_confidence threshold
+    timestamp     = datetime.utcnow(),
+    decision_maker= "analyst_rodriguez",
+    metadata      = {
+        "classification": "TLP:RED",
+        "tlp": True,
+        "authorised_recipients": True,
+    }
+)
+
+is_compliant = engine.check_compliance(decision, "pol-opsec-001")
+print(f"Compliant: {is_compliant}")
+# Compliant: False — outcome 'shared_with_partner' not in allowed_outcomes; confidence below 0.95
+
+if not is_compliant:
+    # Route to J2 for exception review — dual commander approval required
+    exception_id = engine.record_exception(
+        decision_id  = decision.decision_id,
+        policy_id    = "pol-opsec-001",
+        reason       = "Five Eyes partner urgent request — time-critical tactical intelligence",
+        approver     = "j2_officer_hayes",
+        justification= "Commander approved limited dissemination under UKUSA Article 4 emergency clause",
+    )
+    recorder.record_approval_chain(
+        decision_id = decision.decision_id,
+        approvers   = ["j2_officer_hayes", "unit_commander_brooks"],
+        methods     = ["email",             "zoom_call"],
+        contexts    = ["J2 tactical review", "Commander emergency approval"],
+    )
+    print(f"Exception recorded with dual-commander approval: {exception_id}")
+
+# Version history for Inspector General review
+history = engine.get_policy_history("pol-opsec-001")
+print(f"Policy versions on record: {len(history)}")
+```
+
+</Tab>
+
+<Tab title="安全 — SOC/事件">
+
+零信任访问策略为 Tier-1 系统强制要求 MFA，为特权账户强制要求 PAM 会话签出。每个自动化访问决策都会对照这两条策略进行检查。当紧急补丁窗口期间 PAM 门户不可用时，SOC 负责人会在工作开始之前——而不是之后——记录一个有时限的例外并亲自签署。
+
+```python
+from semantica.context import ContextGraph, PolicyEngine, Policy, Decision
+from datetime import datetime
+
+graph  = ContextGraph()
+engine = PolicyEngine(graph_store=graph)
+
+for pol in [
+    Policy(
+        policy_id   = "pol-zt-mfa",
+        name        = "MFA Required — All Tier-1",
+        description = "Every Tier-1 access decision must verify MFA",
+        rules       = {
+            "required_mfa_verified":       True,
+            "allowed_outcomes":            ["access_granted_with_mfa"],
+            "min_confidence":              0.90,
+        },
+        category   = "access_control",
+        version    = "1.0.0",
+        created_at = datetime.utcnow(),
+        updated_at = datetime.utcnow(),
+    ),
+    Policy(
+        policy_id   = "pol-zt-pam",
+        name        = "PAM Checkout — Privileged Accounts",
+        description = "Privileged account use requires PAM session checkout",
+        rules       = {
+            "required_pam_session":        True,
+            "required_session_recording":  True,
+            "max_session_hours":           4,
+            "allowed_outcomes":            ["privileged_access_granted_with_pam"],
+        },
+        category   = "privileged_access",
+        version    = "1.0.0",
+        created_at = datetime.utcnow(),
+        updated_at = datetime.utcnow(),
+    ),
+]:
+    engine.add_policy(pol)
+
+# Emergency patch window — PAM portal down
+decision = Decision(
+    decision_id   = "",
+    category      = "privileged_access",
+    scenario      = "sysadmin_kim patching DC-04 — PAM portal unreachable",
+    reasoning     = "Critical patch CVE-2025-1234 — 4-hour RTO — PAM portal offline",
+    outcome       = "privileged_access_granted_no_pam",
+    confidence    = 0.78,
+    timestamp     = datetime.utcnow(),
+    decision_maker= "soc_automation",
+    metadata      = {
+        "pam_session": False,      # PAM checkout failed
+        "session_recording": True, # Manual recording in place
+        "session_hours": 3,        # Planned session duration
+    }
+)
+
+pam_compliant = engine.check_compliance(decision, "pol-zt-pam")
+print(f"PAM policy compliant: {pam_compliant}")
+# PAM policy compliant: False
+
+# SOC lead records the exception before work begins
+exception_id = engine.record_exception(
+    decision_id  = decision.decision_id,
+    policy_id    = "pol-zt-pam",
+    reason       = "PAM portal offline during critical patch window",
+    approver     = "soc_lead_okafor",
+    justification= "Emergency patch approved under BCP §7.3 — manual session logging in place",
+)
+
+# What-if: impact of cutting max session hours from 4 to 2 for board risk review
+pam_policy = engine.get_policy("pol-zt-pam")
+impact = engine.analyze_policy_impact(
+    policy_id      = "pol-zt-pam",
+    proposed_rules = {**pam_policy.rules, "max_session_hours": 2},
+)
+print(f"Decisions affected by tighter session cap: {impact.get('affected_decisions', 0)}")
+```
+
+</Tab>
+
+<Tab title="生命科学 — 临床/制药">
+
+一条绝对药物禁忌策略禁止在 eGFR 低于 30 时处方二甲双胍。AI 临床决策支持系统会让每个处方决策在抵达 EHR 之前先对照这条策略检查。当边缘病例需要临床例外时，会在处方开出之前记录一条三人 MDT 审批链——顾问医师、肾脏专科医生和药师。
+
+```python
+from semantica.context import ContextGraph, PolicyEngine, Policy, Decision
+from semantica.context.decision_recorder import DecisionRecorder
+from datetime import datetime
+
+graph    = ContextGraph()
+engine   = PolicyEngine(graph_store=graph)
+recorder = DecisionRecorder(graph_store=graph)
+
+safety_policy = Policy(
+    policy_id   = "pol-clin-001",
+    name        = "Metformin Absolute Contraindication — eGFR < 30",
+    description = "Metformin must not be prescribed when eGFR is below 30 ml/min/1.73m²",
+    rules = {
+        "min_egfr":                    30,      # eGFR must be >= 30
+        "allowed_outcomes":            ["metformin_discontinued", "metformin_contraindicated", "alternative_prescribed"],
+        "required_clinician_sign_off": True,
+        "required_egfr_check":         True,
+    },
+    category   = "clinical_safety",
+    version    = "3.0.0",   # aligned to BNF 2024
+    created_at = datetime.utcnow(),
+    updated_at = datetime.utcnow(),
+    metadata   = {"source": "BNF_2024", "strength": "absolute"},
+)
+engine.add_policy(safety_policy)
+
+# AI decision-support recommendation
+decision = Decision(
+    decision_id   = "",
+    category      = "treatment_modification",
+    scenario      = "PT-00841: T2DM, eGFR 28 — metformin review",
+    reasoning     = "eGFR 28 is below the 30 threshold; discontinue metformin and initiate SGLT2i",
+    outcome       = "metformin_discontinued_dapagliflozin_initiated",
+    confidence    = 0.97,
+    timestamp     = datetime.utcnow(),
+    decision_maker= "cdss_v4",
+    metadata      = {
+        "egfr": 28,                    # Below minimum threshold
+        "clinician_sign_off": True,
+        "egfr_check": True,
+        "drug": "metformin",
+    }
+)
+
+is_compliant = engine.check_compliance(decision, "pol-clin-001")
+print(f"Compliant: {is_compliant}")
+# Compliant: True — outcome is metformin_discontinued, which is allowed
+
+# MDT approval chain for the prescribing record
+recorder.record_approval_chain(
+    decision_id = decision.decision_id,
+    approvers   = ["dr_okonkwo",  "consultant_renal_patel", "pharmacist_kwon"],
+    methods     = ["zoom_call",    "zoom_call",               "email"],
+    contexts    = [
+        "Prescribing physician MDT review",
+        "Renal consultant confirmed eGFR 28 — supports discontinuation",
+        "Clinical pharmacist approved SGLT2i initiation protocol",
+    ],
+)
+print("MDT approval chain recorded — prescription safe to issue")
+
+# Policy version history for CQC inspection
+history = engine.get_policy_history("pol-clin-001")
+print(f"Policy versions on record: {len(history)}")
+```
+
+</Tab>
+
+<Tab title="银行业 — 风险/合规">
+
+一条巴塞尔协议 III 住房按揭承保策略将 LTV 上限设为 85%、DSTI 上限设为 40%。信贷模型会在入账之前让每个放款决策对照这条策略检查。当信贷委员会想在下一季度之前提高最低信用评分下限时，影响分析会显示当前存量中已批准的贷款有多少无法通过新规则——而策略变更的审计追踪会提交给董事会风险委员会。
+
+```python
+from semantica.context import ContextGraph, PolicyEngine, Policy, Decision
+from datetime import datetime
+
+graph  = ContextGraph()
+engine = PolicyEngine(graph_store=graph)
+
+mortgage_policy = Policy(
+    policy_id   = "pol-credit-001",
+    name        = "Retail Mortgage Underwriting — Basel III CRE20",
+    description = "Standard residential mortgage policy aligned to Basel III CRE20",
+    rules = {
+        "max_ltv":                         0.85,
+        "max_dsti":                        0.40,
+        "min_credit_score":                680,
+        "min_stress_test_bps":             300,
+        "allowed_outcomes":                ["approved", "approved_with_conditions"],
+    },
+    category   = "credit_risk",
+    version    = "2.3.0",
+    created_at = datetime.utcnow(),
+    updated_at = datetime.utcnow(),
+    metadata   = {"regulatory_basis": "Basel_III_CRE20", "effective_date": "2025-01-01"},
+)
+engine.add_policy(mortgage_policy)
+
+# Borderline decision — LTV 86%, one point over the cap
+decision = Decision(
+    decision_id   = "",
+    category      = "mortgage_origination",
+    scenario      = "APP-2025-9921: £320k mortgage, LTV 86%, DSTI 38%, credit score 710",
+    reasoning     = (
+        "LTV 86% exceeds 85% cap. Stress test at +300bps passes. "
+        "Credit score 710 above 680 floor. DSTI 38% within 40% limit."
+    ),
+    outcome       = "approved_ltv_exception",   # not in allowed_outcomes — flags non-compliance
+    confidence    = 0.72,
+    timestamp     = datetime.utcnow(),
+    decision_maker= "underwriting_model_v4",
+    metadata      = {
+        "ltv": 0.86,           # Exceeds max_ltv of 0.85
+        "dsti": 0.38,          # Within max_dsti of 0.40
+        "credit_score": 710,   # Above min_credit_score of 680
+        "pd": 0.023,           # Recorded for audit — no threshold rule in this policy
+        "lgd": 0.45,           # Recorded for audit — no threshold rule in this policy
+        "stress_test_bps": 300,
+    }
+)
+
+is_compliant = engine.check_compliance(decision, "pol-credit-001")
+print(f"Compliant: {is_compliant}")
+# Compliant: False — ltv (0.86) > max_ltv (0.85) and outcome not in allowed_outcomes
+
+if not is_compliant:
+    exception_id = engine.record_exception(
+        decision_id  = decision.decision_id,
+        policy_id    = "pol-credit-001",
+        reason       = "LTV 86% — one point over cap; stress test and all other metrics pass",
+        approver     = "sr_underwriter_walsh",
+        justification= "Credit committee approved exception under high-quality borrower criteria §4.1",
+    )
+    print(f"Exception recorded: {exception_id}")
+
+# What-if before raising the credit score floor — present to board risk committee
+impact = engine.analyze_policy_impact(
+    policy_id      = "pol-credit-001",
+    proposed_rules = {**mortgage_policy.rules, "min_credit_score": 700},
+)
+print(f"Decisions affected by raising credit score floor to 700: {impact.get('affected_decisions', 0)}")
+
+# Find all decisions made under v2.3.0 — re-audit after policy update
+affected = engine.get_affected_decisions("pol-credit-001", "2.3.0", "2.4.0")
+print(f"Decisions to re-audit: {len(affected)}")
+
+# Commit the update — version bump with full change attribution
+engine.update_policy(
+    policy_id     = "pol-credit-001",
+    rules         = {**mortgage_policy.rules, "min_credit_score": 700},
+    change_reason = "Credit committee Q3 review — raise score floor from 680 to 700",
+    new_version   = "2.4.0",
+)
+print("Policy updated to v2.4.0")
+```
+
+</Tab>
+
+</Tabs>
+
+---
+
+## 相关指南
+
+- [决策智能](decision-intelligence) — `record_decision()`、因果链与先例检索——正是 `check_compliance()` 所评估的那些决策
+- [推理与规则](reasoning) — 用形式化推断补充策略规则，实现逻辑冲突检测
+- [SHACL 校验](shacl-validation) — 对策略节点本身强制执行结构约束
+- [变更管理与版本管理](change-management) — 让策略图谱与知识图谱一同做版本快照
+- [溯源](provenance) — 为每个策略决策与例外提供 W3C PROV-O 数据血缘
+- [MCP Server](mcp-server) — 把 `record_decision` 和 `find_precedents` 暴露为供 AI 智能体使用的 MCP 工具

@@ -1,0 +1,487 @@
+---
+title: "核心概念"
+description: "Semantica 背后的基本思想：知识图谱、推理、溯源与时序智能详解。"
+icon: "book-open"
+---
+
+<Info>
+  初次接触？先阅读[快速开始](getting-started)上手实操示例，再回到这里深入理解。
+</Info>
+
+Semantica 将非结构化数据——文档、网页、报告、数据库——转化为**知识图谱（Knowledge Graph）**：AI 系统可以查询、推理，并追溯回来源的结构化表示。
+
+Semantica 的核心是在你现有 AI 技术栈之上增加一个**上下文与问责层**。它不取代 LangChain、LlamaIndex 或你的大语言模型（LLM）提供商：它让它们的输出变得**有据可依**、**可追溯**、**可审计**。
+
+- **上下文层**——知识图谱、GraphRAG（Graph-Augmented Retrieval，图增强检索）检索、语义嵌入（Embedding）和时序智能，让每个 LLM 响应都立足于结构化、可查询的事实。
+- **问责层**——溯源（Provenance）追踪、决策智能、冲突检测和 W3C PROV-O 合规，让你 AI 技术栈中的每条论断都可审计、可解释。
+- **扩展层**——`PluginRegistry` 和 `MethodRegistry` 让你替换或增强任意组件：摄取器、抽取器、推理引擎、后端——而无需修改框架代码。
+
+<Warning>
+  **这是系统级的可解释性，而非基础模型的可解释性。**Semantica 不会暴露、重构或解释 LLM/基础模型*内部*发生了什么——其内部推理或思维链对外保持不透明，对任何外部系统而言都是如此。Semantica 解释的是模型*之外*的东西：输入的上下文与数据、产生的决策、其溯源、相关关系、所应用的策略，以及完整的执行轨迹。简言之，Semantica 解释和审计的是 *AI 系统做了什么*，而不是基础模型私有的内部推理。
+</Warning>
+
+## 知识图谱
+
+<img src="/assets/img/diagrams/kg-structure.svg" alt="知识图谱的节点与边结构：实体（Person、Organization、Location、Date）及其带类型的关系" style={{ width: '100%', borderRadius: '12px', margin: '0 0 20px' }} />
+
+这是 Semantica 中一切功能的根基。知识图谱把信息存储为三种构建块：
+
+- **节点（实体）**：人物、公司、地点、事件、概念
+- **边（关系）**：`works_for`、`located_in`、`founded_by`
+- **属性**：名称、日期、置信度分数、来源 URL
+
+这种结构让知识变得**可搜索**、**可连接**、**可查询**，而且——这一点至关重要——**可解释**：每个答案都可以追溯到产生它的事实和关系。
+
+
+## 实体抽取（NER）
+
+扫描文本，找出并分类现实世界中的实体：
+
+```python
+# Input: "Apple Inc. was founded by Steve Jobs in 1976 in Cupertino."
+{
+    "entities": [
+        {"text": "Apple Inc.",  "type": "ORGANIZATION", "confidence": 0.98},
+        {"text": "Steve Jobs",  "type": "PERSON",       "confidence": 0.99},
+        {"text": "1976",        "type": "DATE",         "confidence": 0.95},
+        {"text": "Cupertino",   "type": "LOCATION",     "confidence": 0.97}
+    ]
+}
+```
+
+每个实体都会获得一个类型、一个置信度分数，以及指向其源文档的链接。有三种抽取方法可用：
+
+| 方法 | 速度 | 准确率 | 要求 |
+| :------ | :----- | :-------- | :------------ |
+| `"pattern"` | ⚡ 非常快 | 中等 | 无需 API key：基于正则 |
+| `"ml"` | 快 | 高 | 本地 ML 模型 |
+| `"llm"` | 中 | 最高 | LLM 提供商：支持全部 9 家 |
+
+## 关系抽取
+
+找出实体之间如何相互连接：
+
+```python
+{
+    "relationships": [
+        {"subject": "Steve Jobs", "predicate": "founded",    "object": "Apple Inc.", "confidence": 0.92},
+        {"subject": "Apple Inc.", "predicate": "located_in", "object": "Cupertino",  "confidence": 0.89}
+    ]
+}
+```
+
+关系可以通过基于规则的方法、ML 模型或 LLM 抽取——每种方式都会产出带置信度分数和来源归因的带类型三元组（Triplet）。
+
+
+## 知识图谱与向量存储
+
+两者都为 AI 检索存储信息，但它们为不同的任务而生。
+
+<Tabs>
+  <Tab title="知识图谱">
+    以带类型的节点和带标签的边存储**结构化事实**。回答那些需要理解实体之间关系的问题。
+
+    | 优势 | 为什么重要 |
+    | :-------- | :------------- |
+    | **遍历** | 多跳查询：「谁创办了 Apple 前员工后来加入的公司？」 |
+    | **可解释性** | 每个答案都可追溯到具体的节点和边：没有黑盒检索 |
+    | **时序推理** | 时间点查询、`valid_from`/`valid_until` 时间窗口、历史快照 |
+    | **冲突检测** | 两个来源对同一事实不一致时会被呈现出来，并且可以解决 |
+    | **Schema 约束** | SHACL 校验会在约束违规破坏结果之前将其捕获 |
+
+    **何时使用：**当你需要结构化推理、溯源、合规或可解释性时。
+
+    ```python
+    from semantica.kg import GraphBuilder, PathFinder
+
+    graph   = GraphBuilder(merge_entities=True).build(entities=entities, relationships=rels)
+    finder  = PathFinder()
+    path    = finder.dijkstra_shortest_path(graph, "Steve Jobs", "Tim Cook")
+    ```
+  </Tab>
+
+  <Tab title="向量存储">
+    存储文本块的**稠密嵌入**。通过查找语义相似的段落来回答问题：当你事先不知道答案的结构时非常有用。
+
+    | 优势 | 为什么重要 |
+    | :-------- | :------------- |
+    | **模糊相似** | 即使字面用词不匹配也能找到相关内容 |
+    | **速度** | 规模化场景下的亚毫秒级近似最近邻检索 |
+    | **非结构化文本** | 直接作用于段落、句子和原始文档 |
+    | **简单** | 无需设计 Schema：嵌入并建索引即可 |
+
+    **何时使用：**当你需要在大型文本语料上进行快速语义检索时。
+
+    ```python
+    from semantica.vector_store import VectorStore
+
+    store   = VectorStore(backend="faiss", dimension=768)
+    store.add_documents(["Apple was founded in 1976.", "Google was founded in 1998."])
+    results = store.search("tech company founding dates", limit=5)
+    ```
+  </Tab>
+
+  <Tab title="GraphRAG（两者结合）">
+    Semantica 将两者结合：向量检索为图遍历提供种子，而图谱提供向量存储无法提供的结构与溯源。
+
+    | 步骤 | 发生什么 |
+    | :---- | :----------- |
+    | **查询嵌入** | 用户查询被向量化，用于通过向量相似度找到锚点节点 |
+    | **图遍历** | 从锚点节点出发的多跳遍历，检索相关实体和关系 |
+    | **上下文组装** | 事实 + 关系被组装在一起，每条论断都带来源归因 |
+    | **LLM 生成** | LLM 基于检索到的结构化上下文生成答案 |
+
+    **结果：**响应中的每条论断都链接回具体的图谱节点：没有来自训练数据的幻觉，且具备完整审计追踪。
+
+    ```python
+    from semantica.context import AgentContext, ContextGraph
+    from semantica.vector_store import VectorStore
+
+    context = AgentContext(
+        vector_store=VectorStore(backend="faiss", dimension=768),
+        knowledge_graph=ContextGraph(advanced_analytics=True),
+    )
+    result = context.query("Who founded Apple?", mode="graphrag")
+    ```
+  </Tab>
+</Tabs>
+
+
+## 嵌入
+
+嵌入把文本转换成数值向量，让 AI 系统能够度量语义相似度——即使字面用词不同，也能找到相关概念。
+
+Semantica 将嵌入用于：
+
+- **语义检索**：按含义检索，而不仅仅按关键词
+- **实体消解**：在不同来源之间匹配同一实体
+- **先例检索**：找到相似的过往决策
+- **GraphRAG 检索**：向量 + 图遍历的混合方式
+- **距离智能**：任意节点集之间的 N×N 语义距离矩阵
+
+**支持的模型：**Sentence-Transformers、FastEmbed、OpenAI、BGE、Ollama 本地嵌入。
+
+
+## GraphRAG
+
+GraphRAG（Graph-Augmented Retrieval Augmented Generation，图增强检索增强生成）通过将 LLM 响应锚定在结构化知识图谱而非仅原始文本块之上，来增强 LLM 响应。
+
+<img src="/assets/img/diagrams/graphrag-flow.svg" alt="GraphRAG 流程：用户查询 → 向量检索 + 图遍历 → 上下文构建器 → LLM → 有据可依的答案" style={{ width: '100%', borderRadius: '12px', margin: '16px 0 20px' }} />
+
+<Steps>
+  <Step title="用户提交查询">
+    查询被向量化，同时用于为向量检索和图遍历提供种子。
+  </Step>
+  <Step title="混合上下文检索">
+    Semantica 在检索向量相似文本块的同时，还会检索相关的图谱上下文：实体、带类型的关系和多跳推理路径。
+  </Step>
+  <Step title="构建上下文">
+    检索到的事实和推理路径被组装成结构化的提示词上下文，每条事实都标注其来源节点和置信度。
+  </Step>
+  <Step title="LLM 生成有据可依的响应">
+    LLM 产出的答案中，每条论断都链接回图中的一个来源节点：没有凭空断言，没有来自训练数据的幻觉。
+  </Step>
+</Steps>
+
+<Tip>
+  **GraphRAG 消除了标准检索增强生成（RAG）的幻觉与可追溯性问题。**标准 RAG 检索的是文本块；GraphRAG 检索的是带类型关系的结构化事实。LLM 无法凭空编造图谱中从未有过的结构。
+</Tip>
+
+
+## 本体
+
+本体（Ontology）为你的知识定义 Schema 和规则：存在哪些实体类型、哪些关系有效、以及适用哪些约束。
+
+```python
+ontology = {
+    "classes": ["Person", "Organization", "Location"],
+    "relationships": ["works_for", "located_in", "founded_by"],
+    "rules": {
+        "Person":       ["must_have_name"],
+        "Organization": ["must_have_name", "can_have_founding_date"]
+    }
+}
+```
+
+Semantica 可以从你的知识图谱自动生成本体，也可以导入现有的 OWL/RDF/Turtle 本体。**Ontology Hub**（v0.5.0）提供了可视化编辑器、SHACL Studio、对齐编写和实时健康仪表盘。完整的 6 阶段生成流水线见[本体参考](reference/ontology)。
+
+
+## 推理与推断
+
+Semantica 包含多个推理引擎，用于从已有事实推导新知识。
+
+```text
+Known:    Steve Jobs founded Apple Inc.
+Known:    Apple Inc. is headquartered in Cupertino
+Inferred: Steve Jobs has a connection to Cupertino
+```
+
+<Tabs>
+  <Tab title="前向链">
+    反复应用 IF/THEN 规则，直到推导不出新事实为止。最适合告警系统、合规检查和基于触发器的工作流。
+
+    ```python
+    from semantica.reasoning import Reasoner, Rule, Fact, RuleType
+
+    engine = Reasoner()
+    engine.add_fact(Fact(subject="Alice", predicate="is_a", obj="Manager"))
+    engine.add_rule(Rule(
+        rule_type=RuleType.FORWARD_CHAIN,
+        conditions=[{"subject": "?x", "predicate": "is_a", "object": "Manager"}],
+        conclusion={"subject": "?x", "predicate": "has_authority", "object": "true"}
+    ))
+    result = engine.infer()
+    ```
+  </Tab>
+  <Tab title="Rete 网络">
+    面向大型规则集的高效模式匹配：Rete 算法会避免重新求值那些前置条件未发生变化的规则。最适合在数百万事实之上运行数千条规则。
+
+    ```python
+    from semantica.reasoning import ReteEngine
+
+    engine = ReteEngine()
+    engine.load_rules("rules/domain_rules.json")
+    results = engine.run(kg)
+    ```
+  </Tab>
+  <Tab title="演绎与溯因">
+    **演绎**：从前提出发的经典三段论推理，得出必然结论。
+
+    **溯因**：为观测到的证据推断最可能的解释。最适合诊断和调查类使用场景。
+
+    ```python
+    from semantica.reasoning import GraphReasoner
+
+    graph_reasoner = GraphReasoner(kg)
+    graph_reasoner.add_rule({"if": [{"subject": "?a", "predicate": "parent_of", "object": "?b"}], "then": {"subject": "?a", "predicate": "ancestor_of", "object": "?b"}})
+    inferences = graph_reasoner.infer(kg)
+    ```
+  </Tab>
+  <Tab title="Datalog（v0.4.0）">
+    带不动点语义的递归 Horn 子句规则：可处理前向链无法表达的传递闭包和递归关系。
+
+    ```python
+    from semantica.reasoning import DatalogReasoner, DatalogFact, DatalogRule
+
+    reasoner = DatalogReasoner()
+    reasoner.add_fact(DatalogFact("parent", ("alice", "bob")))
+    reasoner.add_rule(DatalogRule("ancestor(?X, ?Y) :- parent(?X, ?Y)."))
+    reasoner.evaluate()
+    results = reasoner.query("ancestor(alice, ?Z)")
+    ```
+  </Tab>
+  <Tab title="引擎对比">
+
+    | 引擎 | 描述 | 最适合 |
+    | :------ | :----------- | :-------- |
+    | 前向链 | 反复应用规则直至不动点 | 告警系统、合规检查 |
+    | Rete 网络 | 高效模式匹配 | 大型规则集、高事实吞吐量 |
+    | 演绎 | 经典三段论推理 | 数学与逻辑推理 |
+    | 溯因 | 推断最可能的解释 | 诊断、调查 |
+    | SPARQL | 基于 RDF 图的查询式推理 | 语义网、本体推理 |
+    | Datalog（v0.4.0） | 递归 Horn 子句规则 | 传递闭包、图可达性 |
+
+  </Tab>
+</Tabs>
+
+所有引擎都产出**可解释的推理路径**，而非黑盒结论。每条推导出的事实都包含产生它的规则和前提。
+
+
+## 时序智能
+
+知识会随时间变化。时序图谱为节点和边附加 `valid_from` / `valid_until` 时间窗口，从而支持时间点查询和历史分析。
+
+```python
+from semantica.kg import TemporalGraphQuery
+from datetime import datetime
+
+query_engine = TemporalGraphQuery(enable_temporal_reasoning=True)
+
+# Query the graph as it existed on a specific date
+snapshot = query_engine.query_at_time(kg, query="", at_time=datetime(2021, 6, 15))
+```
+
+**支持的特性：**Allen 区间代数（全部 13 种时序关系）、OWL-Time 导出、`recorded_at` 时间戳、时序溯源。
+
+**常见用途：**追踪公司管理层变动、政策演变、研究时间线、金融工具历史、监管合规窗口。
+
+
+## 距离智能
+
+探索图谱中任意实体的语义邻域：有助于理解哪些概念彼此接近、检测聚类，以及可视化知识拓扑。
+
+```python
+from semantica.kg import SimilarityCalculator
+
+calc   = SimilarityCalculator()
+scores = calc.calculate_similarity(entity_a, entity_b)
+```
+
+**特性：**N×N 语义距离矩阵、Ego 模式可视化、距离带分类（`near` / `mid` / `far`）、面向大型图谱的嵌入缓存优化。
+
+[Visualization 模块](reference/visualization)将距离矩阵渲染为交互式热力图和 Ego 模式邻域图。[Explorer](reference/explorer) 则把距离智能直接嵌入浏览器仪表盘。
+
+
+## 去重与实体消解
+
+真实数据中，同一个实体会以多个名称出现：「Apple」「Apple Inc.」「Apple Computer Inc.」。Semantica 的去重流水线会检测出这些情况，合并属性、解决冲突，并保留原始来源溯源。
+
+<Tabs>
+  <Tab title="策略">
+
+    | 策略 | 算法 | 最适合 |
+    | :-------- | :--------- | :-------- |
+    | `v1` | Jaro-Winkler 字符串相似度 | 小数据集、快速基线 |
+    | `blocking_v2` | 候选 blocking + 相似度 | 大型语料：减少 O(n²) 次比较 |
+    | `hybrid_v2` | blocking + 语义嵌入匹配 | 结构化/非结构化混合的实体名称 |
+    | `semantic_v2` | 纯嵌入消解 | 比 v1 快至 7 倍；可处理缩写和别名 |
+
+  </Tab>
+  <Tab title="配置">
+    ```python
+    from semantica.deduplication import DuplicateDetector, EntityMerger
+
+    detector = DuplicateDetector(similarity_threshold=0.85)
+    duplicates = detector.detect_duplicates(entities)
+
+    merger = EntityMerger()
+    deduplicated_entities = merger.merge_duplicates(entities)
+    ```
+  </Tab>
+</Tabs>
+
+
+## 溯源与可审计性
+
+Semantica 中的每条事实都链接回：
+
+- 它来自的**源文档**
+- 所使用的**抽取方法**（pattern / ML / LLM）
+- 图构建过程中应用的**本体规则**
+- 产生任何推断事实的**推理步骤**
+
+<Note>
+  这是符合 W3C PROV-O 的血缘：适合需要审计追踪的受监管行业（HIPAA、SOX、GDPR、FDA 21 CFR Part 11）。使用 `RDFExporter(include_provenance=True)` 即可在任何 RDF 导出中内嵌溯源信息。
+</Note>
+
+```python
+from semantica.provenance import ProvenanceManager
+
+prov    = ProvenanceManager()
+lineage = prov.get_entity_lineage("apple_inc")
+
+print(f"Source:    {lineage.source_document}")
+print(f"Method:    {lineage.extraction_method}")
+print(f"Extracted: {lineage.timestamp}")
+print(f"Checksum:  {lineage.checksum}")
+```
+
+
+## 决策智能
+
+每个智能体决策都是 Semantica 中的一等对象：被记录、被因果关联、并可按先例检索。这就是 AI 流水线的**问责层**：决策不再是转瞬即逝的日志消息，而是可查询的知识图谱节点。
+
+```python
+decision_id = context.record_decision(
+    category="model_selection",
+    scenario="Choose LLM for production pipeline",
+    reasoning="GPT-4 benchmark advantage justifies 3x cost increase",
+    outcome="selected_gpt4",
+    confidence=0.91,
+)
+
+# Find similar past decisions before making a new one
+precedents = context.find_precedents("model selection reasoning", limit=5)
+
+# Trace downstream impact of a past decision
+influence  = context.analyze_decision_influence(decision_id)
+```
+
+<Tip>
+  **在每个高风险决策之前先调用 `find_precedents()`。**对全部已记录决策做混合相似度检索，会浮现出可能适用的过往推理：减少智能体多次运行之间的不一致，并让组织真正从 AI 决策历史中学习。
+</Tip>
+
+
+## 冲突检测
+
+当多个来源对同一事实各执一词时，Semantica 会标记并解决冲突，而不是悄悄挑一个值。
+
+**解决策略：**
+
+- **时效性**：优先采用最新的来源
+- **来源可信度**：优先采用最可靠的来源（可信度分数可配置）
+- **多数投票**：在全部来源之间聚合，≥ 2 个一致即成立
+- **人工审核**：标记以供人工裁决；流水线继续运行，不会阻塞
+
+`ConflictResolver`、`SourceTracker` 和 `InvestigationGuideGenerator` 见 [Conflicts 参考](reference/conflicts)。
+
+
+## 自定义插件开发
+
+Semantica 为扩展而生。任何组件——摄取器、抽取器、图构建器、推理引擎——都可以用运行时注册的自定义实现来替换或增强。
+
+<AccordionGroup>
+  <Accordion title="PluginRegistry：按名称替换任意组件">
+
+    `PluginRegistry` 提供跨所有模块的动态插件发现、注册和加载。把你自己的类注册到一个字符串键之下；凡是在配置或流水线步骤中引用该键的地方，Semantica 都会使用它。
+
+    ```python
+    from semantica.core import PluginRegistry
+
+    registry = PluginRegistry()
+
+    # Register a custom ingestor
+    registry.register_plugin(
+        "my_sql_ingestor", MySQLIngestor,
+        version="1.0.0",
+        description="PostgreSQL ingestor for internal warehouse",
+        capabilities=["ingest"],
+    )
+
+    # Load and use
+    plugin = registry.load_plugin("my_sql_ingestor", connection_string="postgresql://...")
+    result = plugin.execute("SELECT * FROM documents")
+
+    # Reference by name in pipeline YAML: no code changes needed
+    ```
+
+    ```yaml
+    steps:
+      - name: ingest
+        plugin: my_sql_ingestor
+        config:
+          connection_string: "${DB_URL}"
+    ```
+
+    **可用扩展点：**摄取器、解析器、规范化器、抽取器、推理引擎、导出格式、向量存储后端、图存储后端、可视化渲染器。
+
+  </Accordion>
+  <Accordion title="MethodRegistry：添加领域特定的图操作">
+
+    `MethodRegistry` 让你按名称在知识图谱对象上注册自定义方法：无需子类化，即可添加领域特定的图操作。
+
+    ```python
+    from semantica.kg import MethodRegistry
+
+    registry = MethodRegistry()
+
+    def find_supply_chain_hops(graph, source_node, max_hops=3):
+        """Custom BFS traversal for supply chain graphs."""
+        ...
+
+    # Register under a string key
+    registry.register("supply_chain_hops", find_supply_chain_hops)
+
+    # Call by name on any graph object
+    result = registry.call("supply_chain_hops", kg, source_node="Supplier_A", max_hops=5)
+
+    # List all registered methods
+    print(registry.list_methods())   # ["supply_chain_hops", ...]
+    ```
+
+  </Accordion>
+</AccordionGroup>
+
+- [快速上手教程](quickstart)——用代码构建完整流水线。
+- [模块指南](modules)——逐一讲解每个模块并附示例。
+- [API 参考](reference/context)——完整技术参考。

@@ -1,0 +1,594 @@
+---
+title: "Pipeline 模块"
+description: "流水线 DSL，支持并行工作器、重试策略、失败处理与进度追踪。"
+icon: "gear"
+---
+
+**`semantica.pipeline`** 让你把 Semantica 组件串联成**可复现、容错的工作流**：
+
+- 按步骤的失败策略：`skip`、`retry`、`abort` 或 `fallback`
+- 通过 `ParallelismManager` 实现并行工作器：线程池或进程池
+- `PipelineValidator` 在运行之前捕获循环依赖、缺失的处理器与配置错误
+- 预置模板：`"document_processing"`、`"rag_pipeline"`、`"kg_construction"`、`"ontology_generation"`
+- 流水线可序列化为 YAML：在任何环境中保存并重新加载
+
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `PipelineBuilder` | 用于连接步骤的 DSL：`add_step`、`connect_steps`、`set_parallel`、`build` |
+| `ExecutionEngine` | 运行已构建的流水线：`execute_pipeline(pipeline, data)` → `ExecutionResult` |
+| `ExecutionResult` | `{success, output, metadata, metrics, errors}`：完整的运行摘要 |
+| `FailureHandler` | 失败时的按步骤策略：`skip`、`retry`、`abort` 或 `fallback` |
+| `ParallelismManager` | 线程池或进程池，用于并发执行步骤，工作器数量可配置 |
+| `PipelineValidator` | 在运行之前捕获依赖循环、缺失的处理器与配置错误 |
+| `PipelineTemplateManager` | 预置模板：`"document_processing"`、`"rag_pipeline"`、`"kg_construction"`、`"ontology_generation"` |
+
+## 为什么要用流水线
+
+你完全可以用普通 Python 代码把 Semantica 模块连接起来。流水线额外带来：
+
+- **重试与失败处理**——单个坏文档不会让 10,000 篇文档的运行崩溃。
+- **并行**——用一个参数即可让抽取跨多个工作器运行。
+- **进度追踪**——tqdm 控制台进度条，或以 WebSocket 流式推送到 Explorer。
+- **可复现性**——把完整的流水线配置保存为 YAML，在任何机器上重放。
+- **增量模式**——重新运行时，只处理自上次运行以来有变化的文档。
+- **校验**——在配置错误的步骤与依赖循环导致运行中途失败之前，先把它们捕获。
+
+<Note>
+  快速脚本和笔记本用普通模块调用即可。凡是需要反复运行、大规模运行或在生产环境运行的东西，都用流水线。
+</Note>
+
+<img src="/assets/img/diagrams/pipeline-flow.svg" alt="流水线步骤序列：Ingest → Parse → Normalize → Extract → Build KG → QA → Store → Deliver" style={{ width: '100%', borderRadius: '10px', margin: '0 0 24px' }} />
+
+## 快速开始
+
+<Steps>
+  <Step title="构建流水线">
+    ```python
+    from semantica.pipeline import PipelineBuilder
+    from semantica.ingest import FileIngestor
+    from semantica.parse import DocumentParser
+    from semantica.semantic_extract import NERExtractor
+    from semantica.kg import GraphBuilder
+
+    ingestor   = FileIngestor()
+    parser     = DocumentParser()
+    extractor  = NERExtractor(method="ml")
+    kg_builder = GraphBuilder(merge_entities=True)
+
+    builder = PipelineBuilder()
+    builder.add_step("ingest",   "file_ingest",    handler=ingestor.ingest_file)
+    builder.add_step("parse",    "document_parse", handler=parser.parse)
+    builder.add_step("extract",  "ner_extract",    handler=extractor.extract)
+    builder.add_step("build_kg", "graph_build",    handler=kg_builder.build)
+    builder.connect_steps("ingest", "parse")
+    builder.connect_steps("parse",  "extract")
+    builder.connect_steps("extract","build_kg")
+
+    pipeline = builder.build("my_pipeline")
+    ```
+  </Step>
+  <Step title="运行前校验">
+    ```python
+    from semantica.pipeline import PipelineValidator
+
+    validator = PipelineValidator()
+    result = validator.validate_pipeline(pipeline)
+
+    if not result.valid:
+        for error in result.errors:   # errors is List[str]
+            print(f"Error: {error}")
+        for warning in result.warnings:
+            print(f"Warning: {warning}")
+    ```
+
+    <Tip>
+      **在生产环境运行之前先用 `PipelineValidator`。**它能捕获依赖循环、缺失的步骤名称以及配置不当的连接——这些问题只会在运行中途才作为错误浮出水面。校验瞬间即可完成；而在 30 分钟的抽取任务之后才捕获这些问题，就绝非如此。
+    </Tip>
+  </Step>
+  <Step title="执行并检查结果">
+    ```python
+    from semantica.pipeline import ExecutionEngine
+
+    engine = ExecutionEngine()
+    result = engine.execute_pipeline(pipeline, data="data/")
+
+    kg = result.output
+    print(f"Success:        {result.success}")
+    print(f"Steps executed: {result.metrics['steps_executed']}")
+    print(f"Steps failed:   {result.metrics['steps_failed']}")
+    print(f"Duration:       {result.metrics['execution_time']:.1f}s")
+    ```
+
+    <Tip>
+      **检查 `result.metrics` 以找出瓶颈。**`result.metrics['steps_executed']` 与 `result.metrics['execution_time']` 能让你快速了解流水线的整体健康状况。要查看每一步的耗时，请在运行结束后查看每个 `PipelineStep` 的 `step.result`。
+    </Tip>
+  </Step>
+</Steps>
+
+## 并行处理
+
+在 builder 上设置并行度，并把 `max_workers` 传给 `ExecutionEngine`：
+
+```python
+from semantica.pipeline import PipelineBuilder, ExecutionEngine
+
+builder = PipelineBuilder()
+builder.add_step("ingest",  "file_ingest",    handler=ingestor.ingest_file)
+builder.add_step("parse",   "document_parse", handler=parser.parse)
+builder.add_step("extract", "ner_extract",    handler=extractor.extract)
+builder.add_step("build",   "graph_build",    handler=kg_builder.build)
+builder.set_parallelism(4)
+
+pipeline = builder.build("parallel_pipeline")
+engine   = ExecutionEngine(max_workers=4)
+result   = engine.execute_pipeline(pipeline, data="data/")
+```
+
+<Tip>
+  **根据负载类型设置 `workers=`。**I/O 密集型步骤（网页抓取、数据库查询）用线程工作器，CPU 密集型步骤（嵌入、OCR、大批量 NER）用进程工作器。把池类型用在不匹配的步骤上，只会浪费资源，毫无速度收益。
+</Tip>
+
+## 重试与错误处理
+
+<Tabs>
+  <Tab title="指数退避（推荐）">
+    ```python
+    from semantica.pipeline import RetryPolicy, RetryStrategy, FailureHandler, ExecutionEngine
+
+    policy = RetryPolicy(
+        max_retries=3,
+        strategy=RetryStrategy.EXPONENTIAL,
+        initial_delay=1.0,    # 1s → 2s → 4s
+        backoff_factor=2.0
+    )
+
+    handler = FailureHandler()
+    handler.set_retry_policy("ner_extract", policy)   # keyed by step_type
+
+    engine = ExecutionEngine(default_max_retries=3, default_backoff_factor=2.0)
+    result = engine.execute_pipeline(pipeline, data="data/")
+    ```
+
+    最适合瞬时 API 错误与限流：每次重试等待更久，给上游服务留出恢复时间。
+  </Tab>
+  <Tab title="线性退避">
+    ```python
+    from semantica.pipeline import RetryPolicy, RetryStrategy
+
+    policy = RetryPolicy(
+        max_retries=3,
+        strategy=RetryStrategy.LINEAR,
+        initial_delay=2.0    # 2s → 4s → 6s
+    )
+    ```
+
+    适用于重试间隔需要可预期增长的场景：例如等待数据库锁释放。
+  </Tab>
+  <Tab title="固定退避">
+    ```python
+    from semantica.pipeline import RetryPolicy, RetryStrategy
+
+    policy = RetryPolicy(
+        max_retries=5,
+        strategy=RetryStrategy.FIXED,
+        initial_delay=1.0    # 1s every attempt
+    )
+    ```
+
+    适用于对具有固定冷却窗口的服务进行重试。
+  </Tab>
+</Tabs>
+
+### 失败策略
+
+| 策略 | 行为 | 适用场景 |
+| :-------- | :--------- | :----------- |
+| `"skip"` | 记录失败，继续处理下一个文档 | 生产环境：一个坏文档不应让 10,000 篇文档的运行停止 |
+| `"stop"` | 立即抛出异常 | 开发环境：快速暴露错误 |
+| `"retry"` | 通过 `RetryPolicy` 重试，然后跳过 | 失败大概率是瞬时性的场景 |
+
+<Warning>
+  在生产环境中，请配置带有限重试次数的 `RetryPolicy`，这样单个失败步骤就不会让整场运行停止。执行结束后，检查 `result.errors` 找出失败的文档并重新处理。
+</Warning>
+
+<Warning>
+  **在生产环境中配置重试策略，把失败控制在局部。**使用 `handler.set_retry_policy("step_type", RetryPolicy(max_retries=3))`，让瞬时错误得到重试而不中止流水线。运行结束后，检查 `result.errors`，找出耗尽重试次数的文档并重新处理。
+</Warning>
+
+## 进度追踪
+
+<Tabs>
+  <Tab title="控制台（tqdm）">
+    ```python
+    from semantica.pipeline import ExecutionEngine
+
+    engine = ExecutionEngine()
+    result = engine.execute_pipeline(pipeline, data="data/")
+    # The progress tracker outputs tqdm bars to the console during execution
+    ```
+
+    通过 Semantica 内置的进度追踪器在终端中显示实时进度条。最适合脚本与 CLI 工具。
+  </Tab>
+  <Tab title="实时状态查询">
+    ```python
+    from semantica.pipeline import ExecutionEngine
+    import threading, time
+
+    engine = ExecutionEngine()
+
+    # Run in a background thread, poll progress from main thread
+    def run():
+        engine.execute_pipeline(pipeline, data="data/")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+
+    while t.is_alive():
+        progress = engine.get_progress(pipeline.name)
+        if progress:
+            print(f"  {progress['completed_steps']}/{progress['total_steps']} steps: {progress['status']}")
+        time.sleep(2)
+    ```
+
+    执行期间轮询 `get_progress()` 获取实时状态。
+  </Tab>
+</Tabs>
+
+## Pipeline DSL
+
+`PipelineBuilder` 使用 `add_step(name, type, **config)` 与 `connect_steps(from, to)` 来定义一个 DAG：
+
+```python
+from semantica.pipeline import PipelineBuilder, ExecutionEngine
+
+builder = PipelineBuilder()
+
+# Add steps: step_type is a string label, handler is the callable invoked at runtime
+builder.add_step("ingest",      "file_ingest",    handler=ingestor.ingest_file)
+builder.add_step("parse",       "document_parse", handler=parser.parse)
+builder.add_step("normalize",   "text_normalize", handler=normalizer.normalize)
+builder.add_step("extract",     "ner_extract",    handler=extractor.extract)
+builder.add_step("rel_extract", "rel_extract",    handler=rel_extractor.extract)
+builder.add_step("build_kg",    "graph_build",    handler=kg_builder.build)
+builder.add_step("deduplicate", "dedup",          handler=deduplicator.deduplicate)
+builder.add_step("export",      "rdf_export",     handler=exporter.export, format="turtle", path="output.ttl")
+
+# Wire the data flow
+builder.connect_steps("ingest",      "parse")
+builder.connect_steps("parse",       "normalize")
+builder.connect_steps("normalize",   "extract")
+builder.connect_steps("extract",     "rel_extract")
+builder.connect_steps("rel_extract", "build_kg")
+builder.connect_steps("build_kg",    "deduplicate")
+builder.connect_steps("deduplicate", "export")
+
+pipeline = builder.build("full_pipeline")
+result   = ExecutionEngine().execute_pipeline(pipeline, data="data/")
+```
+
+## 序列化与恢复流水线
+
+`PipelineSerializer` 把流水线转换为 JSON 或 dict 以便存储，并可在之后重新加载：
+
+```python
+from semantica.pipeline import PipelineSerializer
+
+serializer = PipelineSerializer()
+
+# Serialize to JSON string
+json_str = serializer.serialize_pipeline(pipeline, format="json")
+
+# Save to file
+with open("pipeline_config.json", "w") as f:
+    f.write(json_str)
+
+# Restore on any machine and execute
+with open("pipeline_config.json") as f:
+    restored = serializer.deserialize_pipeline(f.read())
+
+result = ExecutionEngine().execute_pipeline(restored, data="data/")
+```
+
+<Tip>
+  序列化的流水线会保存步骤名称、类型与配置：但不保存处理函数（可调用对象无法被序列化）。执行之前，请在恢复出来的步骤上重新注册处理函数。
+</Tip>
+
+## 预置模板
+
+`PipelineTemplateManager` 会以正确的步骤顺序接好常见工作流——无需手动接线：
+
+```python
+from semantica.pipeline import PipelineTemplateManager
+
+manager = PipelineTemplateManager()
+```
+
+`create_pipeline_from_template(name)` 方法返回一个配置好的 `PipelineBuilder`。在其上调用 `.build(pipeline_name)` 即可得到可运行的 `Pipeline`。
+
+- **document_processing**——**Ingest → Parse → Normalize → Extract → Embed → Build KG**——从摄取到知识图谱的完整文档处理。
+
+  ```python
+  builder  = manager.create_pipeline_from_template("document_processing")
+  pipeline = builder.build("doc_pipeline")
+  ```
+
+- **rag_pipeline**——**Ingest → Chunk → Embed → Store Vectors**——面向问答的 RAG 流水线：构建以向量建索引的存储。
+
+  ```python
+  builder  = manager.create_pipeline_from_template("rag_pipeline")
+  pipeline = builder.build("rag_pipeline")
+  ```
+
+- **kg_construction**——**Ingest → Extract Entities → Extract Relations → Dedup → Resolve → Build Graph**——从多个来源构建知识图谱。
+
+  ```python
+  builder  = manager.create_pipeline_from_template("kg_construction")
+  pipeline = builder.build("kg_pipeline")
+  ```
+
+- **ontology_generation**——**Extract Concepts → Infer Classes → Infer Properties → Generate OWL → Validate**——从抽取出的数据生成本体（Ontology）。
+
+  ```python
+  builder  = manager.create_pipeline_from_template("ontology_generation")
+  pipeline = builder.build("ontology_pipeline")
+  ```
+
+<Tip>
+  **常见模式请使用 `PipelineTemplateManager` 的模板。**`create_pipeline_from_template("kg_construction")` 会按正确顺序接好规范化、去重、冲突检测与图构建——帮你避开「在规范化之前去重」这类常见错误。
+</Tip>
+
+## ExecutionEngine
+
+对流水线执行的细粒度控制：暂停、恢复、取消，以及查看实时进度：
+
+```python
+from semantica.pipeline import ExecutionEngine
+
+engine = ExecutionEngine(max_workers=4)
+
+# pipeline.name is the pipeline ID used for all control operations
+result = engine.execute_pipeline(pipeline, data="data/")
+
+pipeline_id = pipeline.name   # e.g. "my_pipeline"
+
+# Pause after the current step finishes
+engine.pause_pipeline(pipeline_id)
+
+progress = engine.get_progress(pipeline_id)
+print(f"Completed: {progress['completed_steps']}/{progress['total_steps']}")
+print(f"Status: {progress['status']}")
+
+engine.resume_pipeline(pipeline_id)
+engine.stop_pipeline(pipeline_id)
+```
+
+| 方法 | 返回值 | 说明 |
+| :------ | :------- | :----------- |
+| `execute_pipeline(pipeline, data)` | `ExecutionResult` | 从头到尾执行流水线 |
+| `get_pipeline_status(pipeline_id)` | `PipelineStatus` | 当前状态（RUNNING、PAUSED、STOPPED） |
+| `get_progress(pipeline_id)` | `Dict` | `completed_steps`、`total_steps`、`progress_percentage`、`status` |
+| `pause_pipeline(pipeline_id)` | `None` | 在当前步骤完成后挂起 |
+| `resume_pipeline(pipeline_id)` | `None` | 从暂停状态恢复 |
+| `stop_pipeline(pipeline_id)` | `None` | 立即取消并清理 |
+
+## PipelineValidator
+
+在问题演变成运行中途的失败之前就把它们捕获：
+
+```python
+from semantica.pipeline import PipelineValidator
+
+validator = PipelineValidator()
+result    = validator.validate_pipeline(pipeline)
+
+if result.valid:
+    print("Pipeline is valid: safe to run")
+else:
+    for error in result.errors:     # errors is List[str]
+        print(f"Error: {error}")
+    for warning in result.warnings: # warnings is List[str]
+        print(f"Warning: {warning}")
+```
+
+执行的检查：
+- **依赖循环检测**：A 依赖 B，B 依赖 A
+- **步骤类型校验**：每个步骤类型都必须已注册
+- **连接完整性**：被引用的步骤名称必须存在
+- **配置完整性**：必需参数必须存在
+
+## ParallelismManager
+
+<Tabs>
+  <Tab title="线程池（I/O 密集）">
+    ```python
+    from semantica.pipeline import ParallelismManager, Task
+
+    # use_processes=False (default) → thread pool for I/O-bound tasks
+    manager = ParallelismManager(max_workers=8, use_processes=False)
+
+    tasks   = [Task(task_id=f"t{i}", handler=ner.extract, args=(text,)) for i, text in enumerate(texts)]
+    results = manager.execute_parallel(tasks)
+    # returns List[ParallelExecutionResult]
+
+    successes = [r for r in results if r.success]
+    failures  = [r for r in results if not r.success]
+    ```
+
+    **I/O 密集型**步骤使用线程池：网页抓取、数据库查询、API 调用。
+  </Tab>
+  <Tab title="进程池（CPU 密集）">
+    ```python
+    from semantica.pipeline import ParallelismManager, Task
+
+    # use_processes=True → process pool, bypasses Python GIL
+    manager = ParallelismManager(max_workers=4, use_processes=True)
+
+    tasks   = [Task(task_id=f"t{i}", handler=embedder.generate_embeddings, args=(chunk,)) for i, chunk in enumerate(chunks)]
+    results = manager.execute_parallel(tasks)
+    ```
+
+    **CPU 密集型**步骤使用进程池：嵌入、OCR、大批量 NER。
+  </Tab>
+</Tabs>
+
+## ResourceScheduler
+
+防止大规模运行时内存超用：
+
+```python
+from semantica.pipeline import ResourceScheduler, ExecutionEngine
+
+scheduler = ResourceScheduler()
+engine    = ExecutionEngine()
+
+resources = scheduler.allocate_resources(pipeline)
+
+try:
+    result = engine.execute_pipeline(pipeline, data="data/")
+finally:
+    scheduler.release_resources(resources)
+```
+
+## 增量模式
+
+只重新处理自上次运行以来发生变化的数据：
+
+```python
+from semantica.pipeline import PipelineBuilder, ExecutionEngine
+
+builder = PipelineBuilder()
+
+# delta_mode=True tells ExecutionEngine to compute the diff between two snapshots
+# and pass only changed triples to this step's handler
+builder.add_step(
+    "ingest",  "file_ingest",
+    handler=ingestor.ingest_file,
+    delta_mode=True, base_version_id="v1", target_version_id="v2"
+)
+builder.add_step(
+    "extract", "ner_extract",
+    handler=extractor.extract,
+    delta_mode=True, base_version_id="v1", target_version_id="v2"
+)
+builder.add_step(
+    "build", "graph_build",
+    handler=kg_builder.build,
+    delta_mode=False  # always rebuild the merged graph
+)
+builder.connect_steps("ingest", "extract")
+builder.connect_steps("extract", "build")
+
+pipeline = builder.build("delta_pipeline")
+engine   = ExecutionEngine()
+result   = engine.execute_pipeline(
+    pipeline,
+    data="data/",
+    version_manager=version_manager,   # required for delta mode
+    triplet_store=triplet_store        # required for delta mode
+)
+```
+
+<Note>
+  增量检测对源内容使用 SHA-256 校验和。只有校验和与 `base_version_id` 不同的源才会传给下游步骤。对于按小时或按天对不断增长的语料运行的流水线，增量模式省去了冗余的重复嵌入与重复抽取。
+</Note>
+
+## SPARQL CONSTRUCT 模板步骤
+
+使用 `"construct_template"` 步骤类型，把[SPARQL CONSTRUCT 模板](triplet_store#sparql-construct-templates)的渲染与执行作为流水线的一部分。`store_backend` 与 `construct_template_registry` 是执行期资源，而不是步骤配置——把它们传给 `execute_pipeline()`，方式与 `delta_mode` 步骤接收 `version_manager` 和 `triplet_store` 相同：
+
+```python
+from semantica.pipeline import PipelineBuilder, ExecutionEngine
+from semantica.triplet_store.construct_templates import construct_template_step_handler
+
+builder = PipelineBuilder()
+builder.add_step(
+    "apply_person_template",
+    "construct_template",
+    handler=construct_template_step_handler,
+    template_name="person_to_foaf",
+    params={"subject": "http://ex.org/p1", "name": "Alice", "age": 30},
+    target_graph="http://ex.org/graphs/people",
+)
+pipeline = builder.build("person_pipeline")
+
+engine = ExecutionEngine()
+result = engine.execute_pipeline(
+    pipeline,
+    data=None,
+    store_backend=store,                   # required: a BlazegraphStore instance
+    construct_template_registry=registry,  # required: holds the registered template
+)
+
+triplets = result.output   # List[Triplet], already persisted via store.add_triplets
+```
+
+<Note>
+  如果 `execute_pipeline()` 的选项中缺少 `store_backend` 或 `construct_template_registry`，`construct_template` 步骤会抛出 `ProcessingError`；如果 `template_name` 未注册，则会抛出 `ValidationError`。
+</Note>
+
+## Schema
+
+<AccordionGroup>
+  <Accordion title="ExecutionResult schema">
+
+```python
+@dataclass
+class ExecutionResult:
+    success:  bool            # True if all steps completed without failure
+    output:   Any             # output from the final pipeline step
+    metadata: Dict[str, Any]  # {"pipeline_id": "...", "execution_time": 1.23}
+    metrics:  Dict[str, Any]  # {"steps_executed": 4, "steps_failed": 0, "execution_time": 1.23}
+    errors:   List[str]       # error messages from failed steps (empty on full success)
+
+# Access pattern
+result.success                       # bool
+result.output                        # final step output
+result.metadata["pipeline_id"]       # pipeline name used as ID
+result.metadata["execution_time"]    # total wall-clock seconds
+result.metrics["steps_executed"]     # count of successfully completed steps
+result.metrics["steps_failed"]       # count of failed steps
+result.errors                        # List[str] of error messages
+```
+
+  </Accordion>
+  <Accordion title="PipelineStep schema">
+
+```python
+@dataclass
+class PipelineStep:
+    name:              str
+    step_type:         str
+    config:            Dict[str, Any]
+    dependencies:      List[str]          # names of steps this step waits for
+    handler:           Optional[Callable]
+    status:            StepStatus
+    result:            Any
+    error:             Optional[Exception]
+    delta_mode:        bool               # True = process only changed data
+    base_version_id:   Optional[str]     # snapshot ID to diff against
+    target_version_id: Optional[str]     # snapshot ID being produced
+```
+
+  </Accordion>
+  <Accordion title="StepStatus 枚举">
+
+```python
+from semantica.pipeline import StepStatus
+
+StepStatus.PENDING    # Not yet started
+StepStatus.RUNNING    # Currently executing
+StepStatus.COMPLETED  # Finished successfully
+StepStatus.FAILED     # Error occurred: check step.error
+StepStatus.SKIPPED    # Skipped due to FailureHandler "skip" strategy
+```
+
+  </Accordion>
+</AccordionGroup>
+
+- [Ingest](ingest)——大多数流水线的第一步。
+- [Semantic Extract](semantic_extract)——核心抽取步骤。
+- [知识图谱](kg)——图构建步骤。
+- [导出](export)——最终的输出步骤。

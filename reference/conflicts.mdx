@@ -1,0 +1,456 @@
+---
+title: "Conflicts 模块"
+description: "多来源冲突检测与解决：值冲突、类型冲突、时序冲突与逻辑冲突，并附调查指南。"
+icon: "triangle-exclamation"
+---
+
+**`semantica.conflicts`** 检测并解决**多个来源在同一事实上相互矛盾**的问题：
+
+- 五种冲突类型：值、类型、时序、逻辑与关系
+- 七种解决策略：投票、可信度加权、最新优先、首见优先、最高置信度、人工复核、专家复核
+- `InvestigationGuideGenerator` 为人工解决生成逐步的调查说明
+- `SourceTracker` 把每个属性值映射到其贡献来源，实现完整归因
+- 冲突被显式呈现：绝不悄悄污染知识图谱
+
+
+## 为什么要检测冲突
+
+从多个来源摄取数据时，矛盾在所难免。一份年报称苹果的营收是 $391B；一家财经快讯则称 $383B。如果没有冲突检测，两个值都会落进你的图谱，查询会悄悄返回前后不一的结果。
+
+Semantica 的冲突检测把分歧变得显式而可处理：
+
+- **值冲突**：SEC 称营收为 $391B；Reuters 称 $383B
+- **类型冲突**："Python" 在一个来源中是 `ProgrammingLanguage`，在另一个来源中是 `Snake` 物种
+- **时序冲突**：一位 CEO 在重叠的日期区间内有两个不同的雇主
+- **逻辑冲突**：一个实体同时持有两个互斥的属性
+- **关系冲突**：同一条关系在不同来源中的基数或属性不一致
+
+## 导出类
+
+| 类 | 作用 |
+| :--- | :--- |
+| `ConflictDetector` | 跨实体列表检测值、类型与关系冲突 |
+| `ConflictResolver` | 以可配置的策略解决冲突：`voting`、`credibility_weighted`、`most_recent`、`first_seen`、`highest_confidence`、`manual_review`、`expert_review` |
+| `ConflictType` | 枚举：`VALUE_CONFLICT`、`TYPE_CONFLICT`、`TEMPORAL_CONFLICT`、`LOGICAL_CONFLICT`、`RELATIONSHIP_CONFLICT` |
+| `ResolutionStrategy` | 传给 `ConflictResolver` 的可用解决策略枚举 |
+| `ResolutionResult` | 由 `resolve_conflict` / `resolve_conflicts` 返回的 dataclass |
+| `SourceTracker` | 追踪每个实体上的每个属性值由哪个来源贡献 |
+| `SourceReference` | 来源文档引用，含文档、页码、章节与置信度 |
+| `PropertySource` | 聚合的属性级溯源：值 + `SourceReference` 对象列表 |
+| `ConflictAnalyzer` | 分析冲突模式、严重度分布与按来源统计 |
+| `ConflictPattern` | 描述检测到的冲突模式的 dataclass |
+| `InvestigationGuideGenerator` | 为需要人工复核的冲突生成逐步调查指南 |
+| `InvestigationGuide` | 指南 dataclass：`conflict_id`、`conflict_summary`、`severity`、`investigation_steps`、`recommended_actions` |
+| `InvestigationStep` | 步骤 dataclass：`step_number`、`description`、`action`、`expected_outcome` |
+
+## 你将获得
+
+- **ConflictDetector**——跨实体列表与关系列表的值、类型与关系冲突检测。
+- **ConflictResolver**——7 种解决策略，包括投票、可信度加权与时序偏好。
+- **SourceTracker**——追踪每条冲突事实来自哪个来源，并带有按来源的可信度分数。
+- **ConflictAnalyzer**——模式分析、严重度分组、来源级统计与趋势识别。
+- **InvestigationGuideGenerator**——自动生成用于人工复核与专家复核的逐步调查清单。
+- **便捷函数**——`detect_conflicts()` 与 `resolve_conflicts()`，一次调用即可完成工作流。
+
+## 快速开始
+
+<Steps>
+  <Step title="在摄取之前设置可信度分数">
+    ```python
+    from semantica.conflicts import SourceTracker
+
+    tracker = SourceTracker()
+    tracker.set_source_credibility("sec_filings",   0.95)
+    tracker.set_source_credibility("pubmed",        0.92)
+    tracker.set_source_credibility("wikipedia",     0.80)
+    tracker.set_source_credibility("news_articles", 0.65)
+    ```
+  </Step>
+  <Step title="构建图谱之后检测冲突">
+    ```python
+    from semantica.conflicts import ConflictDetector
+
+    detector = ConflictDetector()
+
+    # Detect value conflicts on a specific property
+    conflicts = detector.detect_value_conflicts(entities, "revenue")
+    print("Found %d conflicts" % len(conflicts))
+
+    for conflict in conflicts:
+        print("[%s] entity='%s'  attr='%s'" % (
+            conflict.conflict_type, conflict.entity_id, conflict.property_name))
+        print("  Values: %s  Severity: %s" % (
+            conflict.conflicting_values, conflict.severity))
+    ```
+  </Step>
+  <Step title="按严重度分诊">
+    ```python
+    from semantica.conflicts import ConflictAnalyzer
+
+    analyzer  = ConflictAnalyzer()
+    analysis  = analyzer.analyze_conflicts(conflicts)
+    severity_counts = analysis["by_severity"]["counts"]
+    severity_details = analysis["by_severity"]["details"]
+    print("Critical: %d" % severity_counts.get("critical", 0))
+    print("High:     %d" % severity_counts.get("high", 0))
+    print("Low:      %d" % severity_counts.get("low", 0))
+    ```
+  </Step>
+  <Step title="自动解决低严重度冲突，上报严重冲突">
+    ```python
+    from semantica.conflicts import ConflictResolver, InvestigationGuideGenerator, ResolutionStrategy
+
+    resolver = ConflictResolver(source_tracker=tracker)
+
+    # Auto-resolve low-severity conflicts
+    low_conflicts = severity_details.get("low", [])
+    # Re-fetch full Conflict objects if needed: severity_details contains dicts
+    auto_resolved = resolver.resolve_conflicts(
+        conflicts,
+        strategy=ResolutionStrategy.CREDIBILITY_WEIGHTED,
+    )
+
+    # Generate investigation guides for critical conflicts
+    critical_ids = {d["conflict_id"] for d in severity_details.get("critical", [])}
+    critical_conflicts = [c for c in conflicts if c.conflict_id in critical_ids]
+
+    generator = InvestigationGuideGenerator()
+    for conflict in critical_conflicts:
+        guide = generator.generate_guide(conflict)
+        print("\n%s" % guide.title)
+        for step in guide.investigation_steps:
+            print("  [%d] %s" % (step.step_number, step.description))
+            print("       Action: %s" % step.action)
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  **在合并之前检测，而不是之后。**在去重与图构建之前，先对原始实体数据运行冲突检测。在已经包含合并实体的在线图谱中检测冲突会更难：你会丢失原始的来源归因。
+</Warning>
+
+## ConflictDetector
+
+```python
+from semantica.conflicts import ConflictDetector
+
+detector = ConflictDetector()
+
+# Detect value conflicts on a specific property
+conflicts = detector.detect_value_conflicts(entities, "revenue")
+```
+
+### 检测类型
+
+| 类型 | 检测内容 | 示例 |
+| :---- | :--------------- | :------- |
+| `VALUE` | 同一实体、同一属性在不同来源中取值不同 | 营收 $391B 对 $383B |
+| `TYPE` | 同一实体被归类为不同类型 | "Python" 是 Language 还是 Snake |
+| `TEMPORAL` | 时间戳或有效期窗口相互冲突 | 同一时间在两家公司担任 CEO |
+| `LOGICAL` | 逻辑上不一致的属性组合 | `is_alive=True` 但设置了 `death_date` |
+| `RELATIONSHIP` | 同一关系在不同来源中属性不一致 | 两个来源给出的边权重 0.9 对 0.3 |
+
+<Warning>
+  **`TEMPORAL` 与 `LOGICAL` 冲突检测并未直接实现在 `ConflictDetector` 上。**`ConflictType` 枚举包含这些类型，供自定义流水线使用，但检测器类只实现了 `detect_value_conflicts`、`detect_type_conflicts`、`detect_relationship_conflicts` 与 `detect_entity_conflicts`。
+</Warning>
+
+按类型运行针对性的检测：
+
+```python
+# Detect value conflicts for a specific property
+value_conflicts = detector.detect_value_conflicts(entities, "revenue")
+
+# Detect type classification conflicts
+type_conflicts = detector.detect_type_conflicts(entities)
+
+# Detect relationship property conflicts (takes a list of relationship dicts)
+relation_conflicts = detector.detect_relationship_conflicts(relationships)
+
+# Detect conflicts across all properties of a set of entities
+all_conflicts = detector.detect_entity_conflicts(entities)
+```
+
+### ConflictDetector 方法
+
+| 方法 | 返回值 | 说明 |
+| :------ | :------- | :----------- |
+| `detect_value_conflicts(entities, property_name, entity_type=None)` | `List[Conflict]` | 跨实体实例检测特定属性上的值分歧 |
+| `detect_type_conflicts(entities)` | `List[Conflict]` | 检测类型归类冲突 |
+| `detect_relationship_conflicts(relationships)` | `List[Conflict]` | 检测关系属性冲突（接受关系 dict 列表） |
+| `detect_entity_conflicts(entities, entity_type=None)` | `List[Conflict]` | 为一组实体检测所有受监控属性上的冲突 |
+| `get_conflict_report()` | `Dict[str, Any]` | 生成所有已检测冲突的摘要报告 |
+
+## ConflictResolver
+
+```python
+from semantica.conflicts import ConflictResolver, ResolutionStrategy
+
+resolver = ConflictResolver()
+results  = resolver.resolve_conflicts(conflicts, strategy=ResolutionStrategy.VOTING)
+
+for result in results:
+    print("Resolved '%s' -> %s" % (result.conflict_id, result.resolved_value))
+    print("  Strategy: %s  Confidence: %.2f" % (result.resolution_strategy, result.confidence))
+```
+
+<Tip>
+  **不要自动解决所有冲突。**对 `severity == "critical"` 或 `severity == "high"` 的冲突请使用 `MANUAL_REVIEW`：严重度高意味着分歧大，出错的代价也高。
+</Tip>
+
+### 选择解决策略
+
+<Tabs>
+  <Tab title="CREDIBILITY_WEIGHTED（推荐）">
+    按每个来源被赋予的可信度分数为其值加权：自动偏向权威来源：
+
+    ```python
+    from semantica.conflicts import ConflictResolver, SourceTracker, ResolutionStrategy
+
+    tracker = SourceTracker()
+    tracker.set_source_credibility("sec_filings",   0.92)
+    tracker.set_source_credibility("wikipedia",     0.80)
+    tracker.set_source_credibility("news_articles", 0.65)
+
+    resolver = ConflictResolver(source_tracker=tracker)
+    results  = resolver.resolve_conflicts(
+        conflicts,
+        strategy=ResolutionStrategy.CREDIBILITY_WEIGHTED,
+    )
+    ```
+
+    **最适用于：**可靠性排名明确的来源（SEC > 博客）。
+  </Tab>
+  <Tab title="VOTING">
+    多数投票：跨来源中出现最多的值胜出：
+
+    ```python
+    results = resolver.resolve_conflicts(conflicts, strategy=ResolutionStrategy.VOTING)
+    ```
+
+    **最适用于：**3 个以上可信度大致相当的来源。当所有来源的可信度分数完全相同时，`CREDIBILITY_WEIGHTED` 的行为与 `VOTING` 完全一致。
+  </Tab>
+  <Tab title="MOST_RECENT / FIRST_SEEN">
+    ```python
+    # Most recent source wins: for fast-changing facts
+    results = resolver.resolve_conflicts(conflicts, strategy=ResolutionStrategy.MOST_RECENT)
+
+    # First seen wins: for stable facts (founding date, original name)
+    results = resolver.resolve_conflicts(conflicts, strategy=ResolutionStrategy.FIRST_SEEN)
+    ```
+  </Tab>
+  <Tab title="MANUAL_REVIEW / EXPERT_REVIEW">
+    ```python
+    # Flag for human review: use with InvestigationGuideGenerator
+    results   = resolver.resolve_conflicts(conflicts, strategy=ResolutionStrategy.MANUAL_REVIEW)
+    generator = InvestigationGuideGenerator()
+
+    for conflict in conflicts:
+        guide = generator.generate_guide(conflict)
+        print("%s" % guide.title)
+        for step in guide.investigation_steps:
+            print("  [%d] %s" % (step.step_number, step.description))
+    ```
+
+    **最适用于：**高风险决策（`severity == "critical"`）、受监管数据（HIPAA/SOX）与领域特定的模糊情形。
+  </Tab>
+  <Tab title="策略对比">
+
+    | 策略 | 枚举 | 适用场景 |
+    | :-------- | :---- | :----------- |
+    | 多数投票 | `VOTING` | 3 个以上可信度大致相当的来源 |
+    | 可信度加权 | `CREDIBILITY_WEIGHTED` | 来源的权威程度不同 |
+    | 最新优先 | `MOST_RECENT` | 变化快的事实：股价、人数、状态 |
+    | 首见优先 | `FIRST_SEEN` | 稳定的事实：成立日期、原始名称 |
+    | 最高置信度 | `HIGHEST_CONFIDENCE` | 抽取流水线会输出置信度分数 |
+    | 人工复核 | `MANUAL_REVIEW` | 高风险决策、受监管数据 |
+    | 专家复核 | `EXPERT_REVIEW` | 领域特定的模糊情形：升级给专家处理 |
+  </Tab>
+</Tabs>
+
+使用便捷别名让代码更简短：
+
+```python
+from semantica.conflicts import voting, credibility_weighted, most_recent, highest_confidence
+
+results = resolver.resolve_conflicts(conflicts, strategy=voting)
+```
+
+## SourceTracker
+
+```python
+from semantica.conflicts import SourceTracker, SourceReference
+
+tracker = SourceTracker()
+tracker.set_source_credibility("sec_10k",   0.92)
+tracker.set_source_credibility("wikipedia", 0.80)
+
+source_ref = SourceReference(
+    document="sec_10k_2023",
+    page=12,
+    confidence=0.95,
+)
+tracker.track_property_source(
+    entity_id="apple_inc",
+    property_name="revenue",
+    value="$391B",
+    source=source_ref,
+)
+
+# Returns a PropertySource object with .value and .sources (List[SourceReference])
+prop_source = tracker.get_property_sources("apple_inc", "revenue")
+if prop_source:
+    print("Value: %s" % prop_source.value)
+    for s in prop_source.sources:
+        credibility = tracker.get_source_credibility(s.document)
+        print("  %s (confidence: %.2f, credibility: %.2f)" % (
+            s.document, s.confidence, credibility))
+
+chain = tracker.get_traceability_chain("apple_inc")
+```
+
+**关键行为：**
+- 未显式设置的来源，其可信度分数默认为 0.50
+- `SourceTracker` 存储属性级溯源：你可以精确追踪每个值来自哪个来源
+
+<Warning>
+  **务必设置可信度分数。**所有来源的默认可信度都是 0.50。若不显式设置分数，`CREDIBILITY_WEIGHTED` 的行为就与 `VOTING` 完全一致。这一策略的威力正在于区分度。
+</Warning>
+
+<Tip>
+  **与溯源结合使用。**`SourceTracker` 直接接入[溯源](provenance)模块的审计追踪。如果需要解释某个解决后的值是如何选出的，溯源记录会给你完整的链条。
+</Tip>
+
+## ConflictAnalyzer
+
+```python
+from semantica.conflicts import ConflictAnalyzer
+
+analyzer = ConflictAnalyzer()
+
+analysis     = analyzer.analyze_conflicts(conflicts)
+patterns     = analysis["patterns"]
+severity_counts = analysis["by_severity"]["counts"]
+source_stats = analysis["by_source"]
+trends       = analyzer.analyze_trends(conflicts)
+
+# analyze_trends returns a list of dicts, one per time period
+for t in trends:
+    print("Period: %s  Count: %d  Trend: %s" % (
+        t["period"], t["conflict_count"], t["trend"]))
+```
+
+**关键行为：**
+- `analyze_conflicts()["patterns"]` 返回 `ConflictPattern` 对象列表：用 `pattern.pattern_type` 与 `pattern.frequency` 找出系统性的数据质量问题
+- `analyze_conflicts()["by_source"]` 包含 `counts` 与 `top_sources`：频繁出现在冲突中的来源，上游可能存在数据质量问题
+- `analyze_trends()` 返回按周期组织的 dict 列表（`period`、`conflict_count`、`trend`、`trend_direction`）：`trend` 取值为 `"increasing"`、`"decreasing"` 或 `"stable"`
+
+<Tip>
+  **用 `analyze_conflicts()["by_source"]["top_sources"]` 识别劣质订阅源。**单个来源频繁出现在大量冲突中，说明上游有数据质量问题，而不是需要逐条记录去解决的冲突。把它标记出来，去调查该来源的流水线。
+</Tip>
+
+<Tip>
+  **严重度是字符串标签，不是分数。**`ConflictDetector` 依据属性重要性与取值差异给出 `"critical"`、`"high"` 或 `"medium"`。关键字段（`id`、`name`、`type`、`revenue`）总是产生 `"critical"`。优先处理什么由领域上下文决定。
+</Tip>
+
+## InvestigationGuideGenerator
+
+为需要人工复核或专家复核的冲突，自动生成易于阅读的调查清单：
+
+```python
+from semantica.conflicts import InvestigationGuideGenerator
+
+generator = InvestigationGuideGenerator()
+guide     = generator.generate_guide(conflict)
+
+print("Title:   %s" % guide.title)
+print("Summary: %s" % guide.conflict_summary)
+
+for step in guide.investigation_steps:
+    print("  [%d] %s" % (step.step_number, step.description))
+    print("       Action: %s" % step.action)
+    if step.expected_outcome:
+        print("       Expected: %s" % step.expected_outcome)
+```
+
+## Schema
+
+<AccordionGroup>
+  <Accordion title="Conflict schema">
+
+```python
+@dataclass
+class Conflict:
+    conflict_id:        str
+    conflict_type:      ConflictType        # VALUE_CONFLICT | TYPE_CONFLICT | ...
+    entity_id:          Optional[str]       # entity involved (None for relationship conflicts)
+    property_name:      Optional[str]       # the conflicting property name
+    relationship_id:    Optional[str]       # relationship involved (for RELATIONSHIP_CONFLICT)
+    conflicting_values: List[Any]           # conflicting values (one per source)
+    sources:            List[Dict[str, Any]]# source dicts for each value
+    confidence:         float               # detection confidence 0–1 (default: 1.0)
+    severity:           str                 # "low" | "medium" | "high" | "critical"
+    recommended_action: Optional[str]
+    metadata:           Dict[str, Any]
+```
+
+  </Accordion>
+  <Accordion title="ResolutionResult schema">
+
+```python
+@dataclass
+class ResolutionResult:
+    conflict_id:        str
+    resolved:           bool
+    resolved_value:     Any                 # None if unresolved or flagged for review
+    resolution_strategy: Optional[str]      # e.g. "voting", "credibility_weighted"
+    confidence:         float               # 0.0–1.0
+    sources_used:       List[str]           # document IDs that contributed
+    resolution_notes:   Optional[str]
+    metadata:           Dict[str, Any]
+```
+
+  </Accordion>
+
+  <Accordion title="ConflictType 枚举">
+
+```python
+from semantica.conflicts import ConflictType
+
+ConflictType.VALUE_CONFLICT         # revenue is $391B in source A, $383B in source B
+ConflictType.TYPE_CONFLICT          # "Apple" is ORGANIZATION in one source, PRODUCT in another
+ConflictType.TEMPORAL_CONFLICT      # overlapping validity windows with contradictory states
+ConflictType.LOGICAL_CONFLICT       # fact violates an ontology axiom or SHACL constraint
+ConflictType.RELATIONSHIP_CONFLICT  # inconsistent relationship properties across sources
+```
+
+  </Accordion>
+  <Accordion title="InvestigationGuide 与 InvestigationStep schema">
+
+```python
+@dataclass
+class InvestigationGuide:
+    conflict_id:         str
+    conflict_summary:    str                      # generated summary of the disagreement
+    severity:            str                      # "low" | "medium" | "high" | "critical"
+    conflicting_sources: List[Dict[str, Any]]
+    investigation_steps: List[InvestigationStep]
+    recommended_actions: List[str]
+    context:             Dict[str, Any]
+    generated_at:        str                      # ISO timestamp
+    # title is a @property: "Investigation: <conflict_id>"
+
+@dataclass
+class InvestigationStep:
+    step_number:      int
+    description:      str   # what to do
+    action:           str   # specific action to take
+    expected_outcome: Optional[str]
+```
+
+  </Accordion>
+</AccordionGroup>
+
+- [去重](deduplication)——在冲突检测之前解决重复实体。
+- [本体](ontology)——逻辑冲突会用到 SHACL 形状与本体公理。
+- [溯源](provenance)——追踪每条冲突事实来自哪个来源。
+- [知识图谱](kg)——被检查冲突的那张图谱。
